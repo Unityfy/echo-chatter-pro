@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useRBAC, TeamRole } from "@/hooks/useRBAC";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { User, Users, Building2, Plus, Trash2, Save, Loader2 } from "lucide-react";
+import { User, Users, Building2, Plus, Trash2, Save, Loader2, Shield } from "lucide-react";
 
 interface Profile {
   id: string;
@@ -35,13 +36,17 @@ interface Team {
 interface TeamMember {
   id: string;
   user_id: string;
-  role: "admin" | "member" | "viewer";
+  role: TeamRole;
   joined_at: string;
   profile?: { display_name: string | null; email: string | null; avatar_url: string | null };
 }
 
 const SettingsPage = () => {
   const { user } = useAuth();
+  const { role: myRole, hasPermission, refreshRole } = useRBAC();
+  const canManageTeam = hasPermission("team.manage");
+  const canManageSettings = hasPermission("settings.manage");
+
   const [profile, setProfile] = useState<Profile | null>(null);
   const [team, setTeam] = useState<Team | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -69,7 +74,6 @@ const SettingsPage = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      // Load profile
       const { data: profileData } = await supabase
         .from("profiles")
         .select("*")
@@ -83,7 +87,6 @@ const SettingsPage = () => {
         setCompanyName(profileData.company_name || "");
       }
 
-      // Load teams the user belongs to
       const { data: memberData } = await supabase
         .from("team_members")
         .select("team_id")
@@ -116,7 +119,6 @@ const SettingsPage = () => {
       .eq("team_id", teamId);
 
     if (data) {
-      // Load profiles for each member
       const userIds = data.map((m: any) => m.user_id);
       const { data: profiles } = await supabase
         .from("profiles")
@@ -127,7 +129,6 @@ const SettingsPage = () => {
         ...m,
         profile: profiles?.find((p: any) => p.user_id === m.user_id) || null,
       }));
-
       setMembers(membersWithProfiles as TeamMember[]);
     }
   };
@@ -137,25 +138,16 @@ const SettingsPage = () => {
     setSaving(true);
     const { error } = await supabase
       .from("profiles")
-      .update({
-        full_name: fullName,
-        display_name: displayName,
-        company_name: companyName,
-      })
+      .update({ full_name: fullName, display_name: displayName, company_name: companyName })
       .eq("user_id", user.id);
 
     setSaving(false);
-    if (error) {
-      toast.error("Failed to update profile");
-    } else {
-      toast.success("Profile updated");
-    }
+    error ? toast.error("Failed to update profile") : toast.success("Profile updated");
   };
 
   const createTeam = async () => {
     if (!user || !teamName.trim()) return;
     setSaving(true);
-
     const slug = teamName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 
     const { data: newTeam, error } = await supabase
@@ -170,7 +162,6 @@ const SettingsPage = () => {
       return;
     }
 
-    // Add creator as admin
     await supabase
       .from("team_members")
       .insert({ team_id: newTeam.id, user_id: user.id, role: "admin" as any });
@@ -178,6 +169,7 @@ const SettingsPage = () => {
     setTeam(newTeam as Team);
     setTeamSlug(slug);
     await loadMembers(newTeam.id);
+    await refreshRole();
     toast.success("Workspace created");
     setSaving(false);
   };
@@ -191,15 +183,27 @@ const SettingsPage = () => {
       .eq("id", team.id);
 
     setSaving(false);
+    error ? toast.error("Failed to update workspace") : toast.success("Workspace updated");
+  };
+
+  const changeMemberRole = async (memberId: string, newRole: TeamRole) => {
+    if (!team || !canManageTeam) return;
+    const { error } = await supabase
+      .from("team_members")
+      .update({ role: newRole as any })
+      .eq("id", memberId);
+
     if (error) {
-      toast.error("Failed to update workspace");
+      toast.error("Failed to update role");
     } else {
-      toast.success("Workspace updated");
+      toast.success("Role updated");
+      await loadMembers(team.id);
+      await refreshRole();
     }
   };
 
   const removeMember = async (memberId: string) => {
-    if (!team) return;
+    if (!team || !canManageTeam) return;
     const { error } = await supabase
       .from("team_members")
       .delete()
@@ -224,6 +228,12 @@ const SettingsPage = () => {
     admin: "default",
     member: "secondary",
     viewer: "outline",
+  };
+
+  const roleDescription: Record<string, string> = {
+    admin: "Full access — manage agents, settings, billing, and team",
+    member: "Can manage agents, calls, and workflows",
+    viewer: "Read-only access to dashboards and analytics",
   };
 
   if (loading) {
@@ -253,9 +263,11 @@ const SettingsPage = () => {
           <TabsTrigger value="team" className="gap-1.5">
             <Users className="h-3.5 w-3.5" /> Team Members
           </TabsTrigger>
-          <TabsTrigger value="workspace" className="gap-1.5">
-            <Building2 className="h-3.5 w-3.5" /> Workspace
-          </TabsTrigger>
+          {canManageSettings && (
+            <TabsTrigger value="workspace" className="gap-1.5">
+              <Building2 className="h-3.5 w-3.5" /> Workspace
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* My Profile Tab */}
@@ -275,6 +287,12 @@ const SettingsPage = () => {
                 <div>
                   <p className="text-sm font-medium text-foreground">{fullName || displayName || "No name set"}</p>
                   <p className="text-helper">{user?.email}</p>
+                  {myRole && (
+                    <Badge variant={roleBadgeVariant[myRole]} className="mt-1 text-[10px]">
+                      <Shield className="h-2.5 w-2.5 mr-1" />
+                      {roleLabel[myRole]}
+                    </Badge>
+                  )}
                 </div>
               </div>
 
@@ -309,19 +327,40 @@ const SettingsPage = () => {
             </CardContent>
           </Card>
 
-          <Card className="border-destructive/30">
-            <CardHeader>
-              <CardTitle className="text-card-title text-destructive">Danger Zone</CardTitle>
-              <CardDescription className="text-helper">Permanently delete your account and all data.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="destructive" size="sm">Delete Account</Button>
-            </CardContent>
-          </Card>
+          {canManageSettings && (
+            <Card className="border-destructive/30">
+              <CardHeader>
+                <CardTitle className="text-card-title text-destructive">Danger Zone</CardTitle>
+                <CardDescription className="text-helper">Permanently delete your account and all data.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="destructive" size="sm">Delete Account</Button>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* Team Members Tab */}
         <TabsContent value="team" className="space-y-6 mt-6">
+          {/* Role Legend */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-card-title flex items-center gap-2">
+                <Shield className="h-4 w-4" /> Role Permissions
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {(["admin", "member", "viewer"] as TeamRole[]).map((r) => (
+                <div key={r} className="flex items-center gap-3 rounded-lg bg-muted/30 px-3 py-2">
+                  <Badge variant={roleBadgeVariant[r]} className="text-[10px] w-24 justify-center">
+                    {roleLabel[r]}
+                  </Badge>
+                  <span className="text-helper">{roleDescription[r]}</span>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
           {!team ? (
             <Card>
               <CardContent className="py-12 text-center">
@@ -335,124 +374,155 @@ const SettingsPage = () => {
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle className="text-card-title">Team Members</CardTitle>
-                  <CardDescription className="text-helper">{members.length} member{members.length !== 1 ? "s" : ""} in {team.name}</CardDescription>
+                  <CardDescription className="text-helper">
+                    {members.length} member{members.length !== 1 ? "s" : ""} in {team.name}
+                  </CardDescription>
                 </div>
-                <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-                  <DialogTrigger asChild>
-                    <Button size="sm" className="gap-1.5">
-                      <Plus className="h-3.5 w-3.5" /> Invite
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Invite Team Member</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4 pt-2">
-                      <div className="space-y-2">
-                        <Label>Email</Label>
-                        <Input placeholder="colleague@company.com" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Role</Label>
-                        <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as "member" | "viewer")}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="member">Team Member</SelectItem>
-                            <SelectItem value="viewer">Viewer</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <p className="text-helper">The user must already have an account. Invitation emails are not yet supported.</p>
-                      <Button className="w-full" onClick={() => { toast.info("Invite functionality coming soon"); setInviteOpen(false); }}>
-                        Send Invite
+                {canManageTeam && (
+                  <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+                    <DialogTrigger asChild>
+                      <Button size="sm" className="gap-1.5">
+                        <Plus className="h-3.5 w-3.5" /> Invite
                       </Button>
-                    </div>
-                  </DialogContent>
-                </Dialog>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Invite Team Member</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4 pt-2">
+                        <div className="space-y-2">
+                          <Label>Email</Label>
+                          <Input placeholder="colleague@company.com" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Role</Label>
+                          <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as "member" | "viewer")}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="member">Team Member</SelectItem>
+                              <SelectItem value="viewer">Viewer</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <p className="text-helper">The user must already have an account. Invitation emails are not yet supported.</p>
+                        <Button className="w-full" onClick={() => { toast.info("Invite functionality coming soon"); setInviteOpen(false); }}>
+                          Send Invite
+                        </Button>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                )}
               </CardHeader>
               <CardContent className="space-y-2">
-                {members.map((member) => (
-                  <div key={member.id} className="flex items-center justify-between rounded-lg bg-muted/30 px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-8 w-8 border border-border">
-                        <AvatarFallback className="bg-muted text-foreground text-xs">
-                          {getInitials(member.profile?.display_name, member.profile?.email)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <p className="text-sm font-medium text-foreground">
-                          {member.profile?.display_name || member.profile?.email || "Unknown"}
-                        </p>
-                        <p className="text-helper">{member.profile?.email || ""}</p>
+                {members.map((member) => {
+                  const isSelf = member.user_id === user?.id;
+                  return (
+                    <div key={member.id} className="flex items-center justify-between rounded-lg bg-muted/30 px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-8 w-8 border border-border">
+                          <AvatarFallback className="bg-muted text-foreground text-xs">
+                            {getInitials(member.profile?.display_name, member.profile?.email)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <p className="text-sm font-medium text-foreground">
+                            {member.profile?.display_name || member.profile?.email || "Unknown"}
+                            {isSelf && <span className="text-helper ml-1">(you)</span>}
+                          </p>
+                          <p className="text-helper">{member.profile?.email || ""}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {canManageTeam && !isSelf ? (
+                          <Select
+                            value={member.role}
+                            onValueChange={(v) => changeMemberRole(member.id, v as TeamRole)}
+                          >
+                            <SelectTrigger className="h-7 w-[130px] text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="admin">Admin</SelectItem>
+                              <SelectItem value="member">Team Member</SelectItem>
+                              <SelectItem value="viewer">Viewer</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Badge variant={roleBadgeVariant[member.role]}>{roleLabel[member.role]}</Badge>
+                        )}
+                        {canManageTeam && !isSelf && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                            onClick={() => removeMember(member.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant={roleBadgeVariant[member.role]}>{roleLabel[member.role]}</Badge>
-                      {member.user_id !== user?.id && (
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => removeMember(member.id)}>
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </CardContent>
             </Card>
           )}
         </TabsContent>
 
-        {/* Workspace Tab */}
-        <TabsContent value="workspace" className="space-y-6 mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-card-title">{team ? "Workspace Settings" : "Create Workspace"}</CardTitle>
-              <CardDescription className="text-helper">
-                {team ? "Manage your workspace details." : "Set up a workspace to collaborate with your team."}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="teamName">Workspace Name</Label>
-                <Input id="teamName" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="My Company" />
-              </div>
-              {team && (
-                <div className="space-y-2">
-                  <Label htmlFor="teamSlug">Slug</Label>
-                  <Input id="teamSlug" value={teamSlug} onChange={(e) => setTeamSlug(e.target.value)} placeholder="my-company" />
-                  <p className="text-helper">Used in URLs and API references.</p>
-                </div>
-              )}
-              <div className="flex justify-end pt-2">
-                <Button onClick={team ? saveTeam : createTeam} disabled={saving || !teamName.trim()} className="gap-1.5">
-                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                  {team ? "Save Changes" : "Create Workspace"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {team && (
+        {/* Workspace Tab (Admin only) */}
+        {canManageSettings && (
+          <TabsContent value="workspace" className="space-y-6 mt-6">
             <Card>
               <CardHeader>
-                <CardTitle className="text-card-title">Workspace Info</CardTitle>
+                <CardTitle className="text-card-title">{team ? "Workspace Settings" : "Create Workspace"}</CardTitle>
+                <CardDescription className="text-helper">
+                  {team ? "Manage your workspace details." : "Set up a workspace to collaborate with your team."}
+                </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Workspace ID</span>
-                  <span className="font-mono text-xs text-foreground">{team.id}</span>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="teamName">Workspace Name</Label>
+                  <Input id="teamName" value={teamName} onChange={(e) => setTeamName(e.target.value)} placeholder="My Company" />
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Members</span>
-                  <span className="text-foreground">{members.length}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Plan</span>
-                  <Badge variant="secondary">Free</Badge>
+                {team && (
+                  <div className="space-y-2">
+                    <Label htmlFor="teamSlug">Slug</Label>
+                    <Input id="teamSlug" value={teamSlug} onChange={(e) => setTeamSlug(e.target.value)} placeholder="my-company" />
+                    <p className="text-helper">Used in URLs and API references.</p>
+                  </div>
+                )}
+                <div className="flex justify-end pt-2">
+                  <Button onClick={team ? saveTeam : createTeam} disabled={saving || !teamName.trim()} className="gap-1.5">
+                    {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                    {team ? "Save Changes" : "Create Workspace"}
+                  </Button>
                 </div>
               </CardContent>
             </Card>
-          )}
-        </TabsContent>
+
+            {team && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-card-title">Workspace Info</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Workspace ID</span>
+                    <span className="font-mono text-xs text-foreground">{team.id}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Members</span>
+                    <span className="text-foreground">{members.length}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Plan</span>
+                    <Badge variant="secondary">Free</Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

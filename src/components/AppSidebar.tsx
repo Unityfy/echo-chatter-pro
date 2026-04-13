@@ -8,7 +8,6 @@ import {
   Settings,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
-import { useLocation } from "react-router-dom";
 import {
   Sidebar,
   SidebarContent,
@@ -22,27 +21,46 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
+import { useRBAC, Permission } from "@/hooks/useRBAC";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 
-const mainItems = [
+interface NavItem {
+  title: string;
+  url: string;
+  icon: React.ComponentType<{ className?: string }>;
+  requiredPermission?: Permission;
+}
+
+const mainItems: NavItem[] = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Agents", url: "/agents", icon: Bot },
-  { title: "Calls", url: "/calls", icon: Phone },
-  { title: "Workflows", url: "/workflows", icon: Workflow },
-  { title: "Analytics", url: "/analytics", icon: BarChart3 },
-  { title: "Integrations", url: "/integrations", icon: Plug },
+  { title: "Agents", url: "/agents", icon: Bot, requiredPermission: "agents.view" },
+  { title: "Calls", url: "/calls", icon: Phone, requiredPermission: "calls.view" },
+  { title: "Workflows", url: "/workflows", icon: Workflow, requiredPermission: "workflows.view" },
+  { title: "Analytics", url: "/analytics", icon: BarChart3, requiredPermission: "analytics.view" },
+  { title: "Integrations", url: "/integrations", icon: Plug, requiredPermission: "integrations.view" },
 ];
 
-const bottomItems = [
-  { title: "Settings", url: "/settings", icon: Settings },
+const bottomItems: NavItem[] = [
+  { title: "Settings", url: "/settings", icon: Settings, requiredPermission: "settings.view" },
 ];
+
+const roleLabel: Record<string, string> = { admin: "Admin", member: "Member", viewer: "Viewer" };
 
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === "collapsed";
   const { user } = useAuth();
+  const { role, hasPermission } = useRBAC();
 
   const initials = user?.email?.slice(0, 2).toUpperCase() ?? "U";
+
+  const visibleMain = mainItems.filter(
+    (item) => !item.requiredPermission || hasPermission(item.requiredPermission)
+  );
+  const visibleBottom = bottomItems.filter(
+    (item) => !item.requiredPermission || hasPermission(item.requiredPermission)
+  );
 
   return (
     <Sidebar collapsible="icon">
@@ -62,7 +80,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>Main</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {mainItems.map((item) => (
+              {visibleMain.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
                     <NavLink
@@ -84,7 +102,7 @@ export function AppSidebar() {
         <SidebarGroup className="mt-auto">
           <SidebarGroupContent>
             <SidebarMenu>
-              {bottomItems.map((item) => (
+              {visibleBottom.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
                     <NavLink
@@ -116,6 +134,11 @@ export function AppSidebar() {
               <span className="truncate text-sm font-medium text-foreground">
                 {user?.email}
               </span>
+              {role && (
+                <Badge variant="outline" className="mt-0.5 w-fit text-[10px] px-1.5 py-0">
+                  {roleLabel[role] || role}
+                </Badge>
+              )}
             </div>
           )}
         </div>
