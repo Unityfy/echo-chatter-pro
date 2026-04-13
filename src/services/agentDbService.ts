@@ -37,7 +37,7 @@ export async function loadAgent(agentId: string) {
     .from("agents")
     .select("*")
     .eq("id", agentId)
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
   return data;

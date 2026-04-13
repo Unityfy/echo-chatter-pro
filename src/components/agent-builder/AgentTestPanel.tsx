@@ -22,6 +22,7 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
   const [messages, setMessages] = useState<Message[]>([]);
   const [textInput, setTextInput] = useState("");
   const [latency, setLatency] = useState<number | null>(null);
+  const [recordingStartTime, setRecordingStartTime] = useState<number>(0);
   const abortRef = useRef<AbortController | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -106,6 +107,14 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
 
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
+        const elapsed = Date.now() - recordingStartTime;
+
+        if (elapsed < 1000) {
+          toast.error("Please record for at least 1 second");
+          setIsRecording(false);
+          return;
+        }
+
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
 
         setIsRunning(true);
@@ -117,15 +126,16 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
             toast.error("Could not transcribe audio");
             setIsRunning(false);
           }
-        } catch (e) {
+        } catch (e: any) {
           console.error("STT error:", e);
-          toast.error("Transcription failed");
+          toast.error(e.message || "Transcription failed");
           setIsRunning(false);
         }
       };
 
       recorder.start();
       recorderRef.current = recorder;
+      setRecordingStartTime(Date.now());
       setIsRecording(true);
     } catch (e) {
       toast.error("Microphone access denied");
@@ -133,6 +143,7 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
   };
 
   const stopRecording = () => {
+    if (!isRecording) return;
     recorderRef.current?.stop();
     recorderRef.current = null;
     setIsRecording(false);

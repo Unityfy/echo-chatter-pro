@@ -43,8 +43,17 @@ serve(async (req) => {
     if (!response.ok) {
       const err = await response.text();
       console.error("ElevenLabs STT error:", response.status, err);
-      return new Response(JSON.stringify({ error: "Transcription failed" }), {
-        status: response.status,
+      let errorMsg = "Transcription failed";
+      try {
+        const parsed = JSON.parse(err);
+        if (parsed?.detail?.status === "audio_too_short") {
+          errorMsg = "Audio is too short. Please record for at least 1 second.";
+        } else if (parsed?.detail?.message) {
+          errorMsg = parsed.detail.message;
+        }
+      } catch { /* ignore */ }
+      return new Response(JSON.stringify({ error: errorMsg }), {
+        status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
