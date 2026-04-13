@@ -144,7 +144,8 @@ export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   });
 
   if (!response.ok) {
-    throw new Error(`STT failed: ${response.status}`);
+    const errData = await response.json().catch(() => ({ error: "STT failed" }));
+    throw new Error(errData.error || `STT failed: ${response.status}`);
   }
 
   const data = await response.json();
