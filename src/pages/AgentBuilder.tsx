@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Copy, MoreHorizontal, Clock, Zap, Coins, Save, Loader2 } from "lucide-react";
+import { ArrowLeft, Copy, Clock, Zap, Coins, Save, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
