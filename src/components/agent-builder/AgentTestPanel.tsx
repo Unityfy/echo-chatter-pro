@@ -22,6 +22,7 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
   const [messages, setMessages] = useState<Message[]>([]);
   const [textInput, setTextInput] = useState("");
   const [latency, setLatency] = useState<number | null>(null);
+  const [recordingStartTime, setRecordingStartTime] = useState<number>(0);
   const abortRef = useRef<AbortController | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
