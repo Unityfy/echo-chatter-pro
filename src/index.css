@@ -28,6 +28,13 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 210 40% 98%;
 
+    --success: 142 71% 45%;
+    --success-foreground: 210 40% 98%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 222 47% 6%;
+    --info: 199 89% 48%;
+    --info-foreground: 222 47% 6%;
+
     --border: 222 30% 18%;
     --input: 222 30% 18%;
     --ring: 199 89% 48%;
@@ -79,6 +86,23 @@
   }
   .glass {
     @apply bg-card/50 backdrop-blur-xl border border-border/50;
+  }
+
+  /* Typography hierarchy */
+  .text-page-title {
+    @apply text-3xl font-bold tracking-tight text-foreground;
+  }
+  .text-section-title {
+    @apply text-xl font-semibold tracking-tight text-foreground;
+  }
+  .text-card-title {
+    @apply text-base font-semibold text-foreground;
+  }
+  .text-body {
+    @apply text-sm text-foreground;
+  }
+  .text-helper {
+    @apply text-xs text-muted-foreground;
   }
 }
 
