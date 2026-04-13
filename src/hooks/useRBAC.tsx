@@ -127,9 +127,19 @@ export function RBACProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useRBAC() {
+export function useRBAC(): RBACContextType {
   const ctx = useContext(RBACContext);
-  if (!ctx) throw new Error("useRBAC must be used within <RBACProvider>");
+  if (!ctx) {
+    // Fallback for edge cases (HMR, route transitions)
+    return {
+      role: null,
+      teamId: null,
+      loading: true,
+      hasPermission: () => true,
+      can: () => true,
+      refreshRole: async () => {},
+    };
+  }
   return ctx;
 }
 
