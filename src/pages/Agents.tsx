@@ -40,38 +40,7 @@ interface Agent {
 
 // ─── Placeholder Data ────────────────────────────────────────────────
 
-const INITIAL_AGENTS: Agent[] = [
-  {
-    id: "1", name: "Support Bot", description: "Handles inbound support calls, FAQs, and ticket creation.",
-    status: "active", type: "support", language: "English", voice: "Nova",
-    updatedAt: "2026-04-12", calls: 520, successRate: 96,
-  },
-  {
-    id: "2", name: "Sales Bot", description: "Qualifies leads, books demos, and follows up with prospects.",
-    status: "active", type: "sales", language: "English", voice: "Onyx",
-    updatedAt: "2026-04-11", calls: 412, successRate: 91,
-  },
-  {
-    id: "3", name: "Booking Bot", description: "Schedules appointments and manages calendar availability.",
-    status: "active", type: "booking", language: "English", voice: "Shimmer",
-    updatedAt: "2026-04-10", calls: 315, successRate: 94,
-  },
-  {
-    id: "4", name: "Follow-up Bot", description: "Automated post-call follow-ups and satisfaction surveys.",
-    status: "paused", type: "follow-up", language: "Spanish", voice: "Echo",
-    updatedAt: "2026-04-08", calls: 187, successRate: 89,
-  },
-  {
-    id: "5", name: "Enterprise Onboarding", description: "Guides new enterprise clients through onboarding steps.",
-    status: "draft", type: "custom", language: "English", voice: "Alloy",
-    updatedAt: "2026-04-06", calls: 0, successRate: 0,
-  },
-  {
-    id: "6", name: "Multilingual Support", description: "Handles support queries in French and German.",
-    status: "archived", type: "support", language: "French", voice: "Nova",
-    updatedAt: "2026-03-28", calls: 95, successRate: 88,
-  },
-];
+const INITIAL_AGENTS: Agent[] = [];
 
 const LANGUAGES = ["All", "English", "Spanish", "French", "German"];
 const STATUSES: { label: string; value: string }[] = [
