@@ -55,7 +55,7 @@ const AgentBuilder = () => {
           configMap[c.section] = c.config as Record<string, unknown>;
         }
         setConfigs(configMap);
-      } catch (e) {
+      } catch {
         // Agent may not exist in DB yet (created locally)
         console.log("Agent not found in DB, using defaults");
       } finally {
