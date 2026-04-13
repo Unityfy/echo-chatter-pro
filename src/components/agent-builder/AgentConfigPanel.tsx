@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Grid3X3, BookOpen, Volume2, AudioLines, Phone, BarChart3,
   Shield, Webhook, Puzzle, Plus, Upload, Trash2,
@@ -17,6 +17,13 @@ import {
 } from "@/components/ui/select";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+export type AgentConfigs = Record<string, Record<string, unknown>>;
+
+interface AgentConfigPanelProps {
+  configs: AgentConfigs;
+  onConfigsChange: (configs: AgentConfigs) => void;
+}
 
 interface ConfigSection {
   id: string;
@@ -47,13 +54,13 @@ function SectionWrapper({ section }: { section: ConfigSection }) {
 
 // ─── Section Contents ────────────────────────────────────────
 
-function FunctionsSection() {
-  const [enabled, setEnabled] = useState(false);
+function FunctionsSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const enabled = (config.enabled as boolean) ?? false;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Label className="text-xs">Enable Function Calling</Label>
-        <Switch checked={enabled} onCheckedChange={setEnabled} />
+        <Switch checked={enabled} onCheckedChange={(v) => onChange({ ...config, enabled: v })} />
       </div>
       {enabled && (
         <Button variant="outline" size="sm" className="w-full text-xs gap-1.5">
@@ -64,13 +71,13 @@ function FunctionsSection() {
   );
 }
 
-function KnowledgeBaseSection() {
-  const [enabled, setEnabled] = useState(true);
+function KnowledgeBaseSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const enabled = (config.enabled as boolean) ?? true;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Label className="text-xs">Enable Knowledge Base</Label>
-        <Switch checked={enabled} onCheckedChange={setEnabled} />
+        <Switch checked={enabled} onCheckedChange={(v) => onChange({ ...config, enabled: v })} />
       </div>
       <Button variant="outline" size="sm" className="w-full text-xs gap-1.5">
         <Upload className="h-3.5 w-3.5" /> Upload Documents
@@ -80,65 +87,68 @@ function KnowledgeBaseSection() {
   );
 }
 
-function SpeechSettingsSection() {
-  const [speed, setSpeed] = useState([1.0]);
-  const [pitch, setPitch] = useState([1.0]);
-  const [bargeIn, setBargeIn] = useState(true);
-  const [noiseSuppression, setNoiseSuppression] = useState(true);
+function SpeechSettingsSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const speed = (config.speed as number) ?? 1.0;
+  const pitch = (config.pitch as number) ?? 1.0;
+  const bargeIn = (config.bargeIn as boolean) ?? true;
+  const noiseSuppression = (config.noiseSuppression as boolean) ?? true;
+
+  const update = (key: string, val: unknown) => onChange({ ...config, [key]: val });
 
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs">Speed</Label>
-          <span className="text-[11px] text-muted-foreground">{speed[0].toFixed(1)}x</span>
+          <span className="text-[11px] text-muted-foreground">{speed.toFixed(1)}x</span>
         </div>
-        <Slider value={speed} onValueChange={setSpeed} min={0.5} max={2.0} step={0.1} className="w-full" />
+        <Slider value={[speed]} onValueChange={([v]) => update("speed", v)} min={0.5} max={2.0} step={0.1} className="w-full" />
       </div>
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <Label className="text-xs">Pitch</Label>
-          <span className="text-[11px] text-muted-foreground">{pitch[0].toFixed(1)}</span>
+          <span className="text-[11px] text-muted-foreground">{pitch.toFixed(1)}</span>
         </div>
-        <Slider value={pitch} onValueChange={setPitch} min={0.5} max={2.0} step={0.1} className="w-full" />
+        <Slider value={[pitch]} onValueChange={([v]) => update("pitch", v)} min={0.5} max={2.0} step={0.1} className="w-full" />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Interrupt (Barge-in)</Label>
-        <Switch checked={bargeIn} onCheckedChange={setBargeIn} />
+        <Switch checked={bargeIn} onCheckedChange={(v) => update("bargeIn", v)} />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Noise Suppression</Label>
-        <Switch checked={noiseSuppression} onCheckedChange={setNoiseSuppression} />
+        <Switch checked={noiseSuppression} onCheckedChange={(v) => update("noiseSuppression", v)} />
       </div>
     </div>
   );
 }
 
-function TranscriptionSection() {
-  const [enabled, setEnabled] = useState(true);
-  const [partial, setPartial] = useState(true);
-  const [langDetect, setLangDetect] = useState(false);
+function TranscriptionSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const enabled = (config.enabled as boolean) ?? true;
+  const partial = (config.partial as boolean) ?? true;
+  const langDetect = (config.langDetect as boolean) ?? false;
+  const latencyPref = (config.latencyPref as string) ?? "balanced";
+
+  const update = (key: string, val: unknown) => onChange({ ...config, [key]: val });
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <Label className="text-xs">Enable Transcription</Label>
-        <Switch checked={enabled} onCheckedChange={setEnabled} />
+        <Switch checked={enabled} onCheckedChange={(v) => update("enabled", v)} />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Partial Transcripts</Label>
-        <Switch checked={partial} onCheckedChange={setPartial} />
+        <Switch checked={partial} onCheckedChange={(v) => update("partial", v)} />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Language Detection</Label>
-        <Switch checked={langDetect} onCheckedChange={setLangDetect} />
+        <Switch checked={langDetect} onCheckedChange={(v) => update("langDetect", v)} />
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs">Latency Preference</Label>
-        <Select defaultValue="balanced">
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue />
-          </SelectTrigger>
+        <Select value={latencyPref} onValueChange={(v) => update("latencyPref", v)}>
+          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="low">Low Latency</SelectItem>
             <SelectItem value="balanced">Balanced</SelectItem>
@@ -150,49 +160,50 @@ function TranscriptionSection() {
   );
 }
 
-function CallSettingsSection() {
-  const [maxDuration, setMaxDuration] = useState("30");
-  const [silenceTimeout, setSilenceTimeout] = useState("10");
-  const [voicemail, setVoicemail] = useState(true);
-  const [recording, setRecording] = useState(true);
-  const [transfer, setTransfer] = useState(false);
+function CallSettingsSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const maxDuration = (config.maxDuration as string) ?? "30";
+  const silenceTimeout = (config.silenceTimeout as string) ?? "10";
+  const voicemail = (config.voicemail as boolean) ?? true;
+  const recording = (config.recording as boolean) ?? true;
+  const transfer = (config.transfer as boolean) ?? false;
+
+  const update = (key: string, val: unknown) => onChange({ ...config, [key]: val });
 
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
         <Label className="text-xs">Max Call Duration (min)</Label>
-        <Input value={maxDuration} onChange={(e) => setMaxDuration(e.target.value)} className="h-8 text-xs" type="number" />
+        <Input value={maxDuration} onChange={(e) => update("maxDuration", e.target.value)} className="h-8 text-xs" type="number" />
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs">Silence Timeout (sec)</Label>
-        <Input value={silenceTimeout} onChange={(e) => setSilenceTimeout(e.target.value)} className="h-8 text-xs" type="number" />
+        <Input value={silenceTimeout} onChange={(e) => update("silenceTimeout", e.target.value)} className="h-8 text-xs" type="number" />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Voicemail Detection</Label>
-        <Switch checked={voicemail} onCheckedChange={setVoicemail} />
+        <Switch checked={voicemail} onCheckedChange={(v) => update("voicemail", v)} />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Call Recording</Label>
-        <Switch checked={recording} onCheckedChange={setRecording} />
+        <Switch checked={recording} onCheckedChange={(v) => update("recording", v)} />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Call Transfer</Label>
-        <Switch checked={transfer} onCheckedChange={setTransfer} />
+        <Switch checked={transfer} onCheckedChange={(v) => update("transfer", v)} />
       </div>
     </div>
   );
 }
 
-function PostCallSection() {
-  const [fields, setFields] = useState([
+function PostCallSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const fields = (config.fields as { name: string; type: string }[]) ?? [
     { name: "name", type: "string" },
     { name: "email", type: "string" },
     { name: "intent", type: "string" },
     { name: "summary", type: "string" },
-  ]);
+  ];
 
-  const addField = () => setFields([...fields, { name: "", type: "string" }]);
-  const removeField = (i: number) => setFields(fields.filter((_, idx) => idx !== i));
+  const setFields = (newFields: { name: string; type: string }[]) => onChange({ ...config, fields: newFields });
 
   return (
     <div className="space-y-3">
@@ -217,9 +228,7 @@ function PostCallSection() {
               setFields(next);
             }}
           >
-            <SelectTrigger className="h-7 text-xs w-[90px]">
-              <SelectValue />
-            </SelectTrigger>
+            <SelectTrigger className="h-7 text-xs w-[90px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="string">String</SelectItem>
               <SelectItem value="number">Number</SelectItem>
@@ -227,50 +236,56 @@ function PostCallSection() {
               <SelectItem value="array">Array</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => removeField(i)}>
+          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => setFields(fields.filter((_, idx) => idx !== i))}>
             <Trash2 className="h-3 w-3 text-destructive" />
           </Button>
         </div>
       ))}
-      <Button variant="outline" size="sm" className="w-full text-xs gap-1.5" onClick={addField}>
+      <Button variant="outline" size="sm" className="w-full text-xs gap-1.5" onClick={() => setFields([...fields, { name: "", type: "string" }])}>
         <Plus className="h-3.5 w-3.5" /> Add Field
       </Button>
     </div>
   );
 }
 
-function SecuritySection() {
-  const [hallucination, setHallucination] = useState(true);
-  const [unsafeHandling, setUnsafeHandling] = useState(true);
+function SecuritySection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const hallucination = (config.hallucination as boolean) ?? true;
+  const unsafeHandling = (config.unsafeHandling as boolean) ?? true;
+  const fallback = (config.fallback as string) ?? "I'm sorry, I didn't understand that. Could you rephrase?";
+  const maxRetries = (config.maxRetries as string) ?? "3";
+
+  const update = (key: string, val: unknown) => onChange({ ...config, [key]: val });
 
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
         <Label className="text-xs">Fallback Response</Label>
-        <Input defaultValue="I'm sorry, I didn't understand that. Could you rephrase?" className="h-8 text-xs" />
+        <Input value={fallback} onChange={(e) => update("fallback", e.target.value)} className="h-8 text-xs" />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Hallucination Guard</Label>
-        <Switch checked={hallucination} onCheckedChange={setHallucination} />
+        <Switch checked={hallucination} onCheckedChange={(v) => update("hallucination", v)} />
       </div>
       <div className="flex items-center justify-between">
         <Label className="text-xs">Unsafe Query Handling</Label>
-        <Switch checked={unsafeHandling} onCheckedChange={setUnsafeHandling} />
+        <Switch checked={unsafeHandling} onCheckedChange={(v) => update("unsafeHandling", v)} />
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs">Max Retries</Label>
-        <Input defaultValue="3" className="h-8 text-xs" type="number" />
+        <Input value={maxRetries} onChange={(e) => update("maxRetries", e.target.value)} className="h-8 text-xs" type="number" />
       </div>
     </div>
   );
 }
 
-function WebhookSection() {
-  const [url, setUrl] = useState("");
-  const [events, setEvents] = useState<string[]>(["call_ended"]);
+function WebhookSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+  const url = (config.url as string) ?? "";
+  const events = (config.events as string[]) ?? ["call_ended"];
 
+  const update = (key: string, val: unknown) => onChange({ ...config, [key]: val });
   const toggleEvent = (ev: string) => {
-    setEvents((prev) => prev.includes(ev) ? prev.filter((e) => e !== ev) : [...prev, ev]);
+    const next = events.includes(ev) ? events.filter((e) => e !== ev) : [...events, ev];
+    update("events", next);
   };
 
   const allEvents = ["call_started", "call_ended", "transcript_updated"];
@@ -279,7 +294,7 @@ function WebhookSection() {
     <div className="space-y-3">
       <div className="space-y-1.5">
         <Label className="text-xs">Webhook URL</Label>
-        <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://your-api.com/webhook" className="h-8 text-xs" />
+        <Input value={url} onChange={(e) => update("url", e.target.value)} placeholder="https://your-api.com/webhook" className="h-8 text-xs" />
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs">Events</Label>
@@ -316,16 +331,21 @@ function MCPsSection() {
 
 // ─── Main Component ──────────────────────────────────────────
 
-export function AgentConfigPanel() {
+export function AgentConfigPanel({ configs, onConfigsChange }: AgentConfigPanelProps) {
+  const getConfig = (section: string) => configs[section] || {};
+  const setConfig = (section: string) => (config: Record<string, unknown>) => {
+    onConfigsChange({ ...configs, [section]: config });
+  };
+
   const sections: ConfigSection[] = [
-    { id: "functions", label: "Functions", icon: Grid3X3, content: <FunctionsSection /> },
-    { id: "knowledge", label: "Knowledge Base", icon: BookOpen, content: <KnowledgeBaseSection /> },
-    { id: "speech", label: "Speech Settings", icon: Volume2, content: <SpeechSettingsSection /> },
-    { id: "transcription", label: "Realtime Transcription Settings", icon: AudioLines, content: <TranscriptionSection /> },
-    { id: "call", label: "Call Settings", icon: Phone, content: <CallSettingsSection /> },
-    { id: "postcall", label: "Post-Call Data Extraction", icon: BarChart3, content: <PostCallSection /> },
-    { id: "security", label: "Security & Fallback Settings", icon: Shield, content: <SecuritySection /> },
-    { id: "webhook", label: "Webhook Settings", icon: Webhook, content: <WebhookSection /> },
+    { id: "functions", label: "Functions", icon: Grid3X3, content: <FunctionsSection config={getConfig("functions")} onChange={setConfig("functions")} /> },
+    { id: "knowledge", label: "Knowledge Base", icon: BookOpen, content: <KnowledgeBaseSection config={getConfig("knowledge")} onChange={setConfig("knowledge")} /> },
+    { id: "speech", label: "Speech Settings", icon: Volume2, content: <SpeechSettingsSection config={getConfig("speech")} onChange={setConfig("speech")} /> },
+    { id: "transcription", label: "Realtime Transcription Settings", icon: AudioLines, content: <TranscriptionSection config={getConfig("transcription")} onChange={setConfig("transcription")} /> },
+    { id: "call", label: "Call Settings", icon: Phone, content: <CallSettingsSection config={getConfig("call")} onChange={setConfig("call")} /> },
+    { id: "postcall", label: "Post-Call Data Extraction", icon: BarChart3, content: <PostCallSection config={getConfig("postcall")} onChange={setConfig("postcall")} /> },
+    { id: "security", label: "Security & Fallback Settings", icon: Shield, content: <SecuritySection config={getConfig("security")} onChange={setConfig("security")} /> },
+    { id: "webhook", label: "Webhook Settings", icon: Webhook, content: <WebhookSection config={getConfig("webhook")} onChange={setConfig("webhook")} /> },
     { id: "mcps", label: "MCPs", icon: Puzzle, content: <MCPsSection /> },
   ];
 
