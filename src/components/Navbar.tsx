@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Phone } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const Navbar = () => {
   return (
@@ -19,8 +20,8 @@ const Navbar = () => {
         </div>
 
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm">Log in</Button>
-          <Button variant="hero" size="sm">Get Started</Button>
+          <Button variant="ghost" size="sm" asChild><Link to="/login">Log in</Link></Button>
+          <Button variant="hero" size="sm" asChild><Link to="/signup">Get Started</Link></Button>
         </div>
       </div>
     </nav>
