@@ -80,6 +80,23 @@
   .glass {
     @apply bg-card/50 backdrop-blur-xl border border-border/50;
   }
+
+  /* Typography hierarchy */
+  .text-page-title {
+    @apply text-3xl font-bold tracking-tight text-foreground;
+  }
+  .text-section-title {
+    @apply text-xl font-semibold tracking-tight text-foreground;
+  }
+  .text-card-title {
+    @apply text-base font-semibold text-foreground;
+  }
+  .text-body {
+    @apply text-sm text-foreground;
+  }
+  .text-helper {
+    @apply text-xs text-muted-foreground;
+  }
 }
 
 @keyframes float {
