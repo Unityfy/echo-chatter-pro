@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Bot, Plus, Search, MoreHorizontal, Pencil, Copy, Trash2, Filter,
 } from "lucide-react";
@@ -76,6 +77,7 @@ const typeLabel: Record<AgentType, string> = {
 
 const Agents = () => {
   const { hasPermission } = useRBAC();
+  const navigate = useNavigate();
   const canManage = hasPermission("agents.manage");
 
   const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
@@ -119,6 +121,7 @@ const Agents = () => {
     setNewName(""); setNewDesc(""); setNewType("custom"); setNewLang("English"); setNewVoice("Nova");
     setCreateOpen(false);
     toast.success(`Agent "${agent.name}" created`);
+    navigate(`/agents/${agent.id}`);
   };
 
   const handleDuplicate = (agent: Agent) => {
@@ -284,7 +287,8 @@ const Agents = () => {
           {filtered.map((agent) => (
             <Card
               key={agent.id}
-              className="group relative hover:border-primary/30 transition-colors"
+              className="group relative hover:border-primary/30 transition-colors cursor-pointer"
+              onClick={() => navigate(`/agents/${agent.id}`)}
             >
               <CardContent className="p-5 space-y-3">
                 {/* Top row */}
@@ -305,6 +309,7 @@ const Agents = () => {
                           variant="ghost"
                           size="icon"
                           className="h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => e.stopPropagation()}
                         >
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>

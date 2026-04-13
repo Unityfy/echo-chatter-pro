@@ -14,6 +14,109 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_configs: {
+        Row: {
+          agent_id: string
+          config: Json
+          created_at: string
+          id: string
+          section: string
+          updated_at: string
+        }
+        Insert: {
+          agent_id: string
+          config?: Json
+          created_at?: string
+          id?: string
+          section: string
+          updated_at?: string
+        }
+        Update: {
+          agent_id?: string
+          config?: Json
+          created_at?: string
+          id?: string
+          section?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_configs_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agents: {
+        Row: {
+          calls: number | null
+          created_at: string
+          created_by: string
+          description: string | null
+          id: string
+          language: string | null
+          model: string | null
+          name: string
+          prompt: string | null
+          status: Database["public"]["Enums"]["agent_status"]
+          success_rate: number | null
+          team_id: string
+          type: string | null
+          updated_at: string
+          voice: string | null
+          welcome_message: string | null
+          welcome_mode: string | null
+        }
+        Insert: {
+          calls?: number | null
+          created_at?: string
+          created_by: string
+          description?: string | null
+          id?: string
+          language?: string | null
+          model?: string | null
+          name: string
+          prompt?: string | null
+          status?: Database["public"]["Enums"]["agent_status"]
+          success_rate?: number | null
+          team_id: string
+          type?: string | null
+          updated_at?: string
+          voice?: string | null
+          welcome_message?: string | null
+          welcome_mode?: string | null
+        }
+        Update: {
+          calls?: number | null
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          id?: string
+          language?: string | null
+          model?: string | null
+          name?: string
+          prompt?: string | null
+          status?: Database["public"]["Enums"]["agent_status"]
+          success_rate?: number | null
+          team_id?: string
+          type?: string | null
+          updated_at?: string
+          voice?: string | null
+          welcome_message?: string | null
+          welcome_mode?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agents_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -127,6 +230,7 @@ export type Database = {
       }
     }
     Enums: {
+      agent_status: "active" | "draft" | "paused" | "archived"
       team_role: "admin" | "member" | "viewer"
     }
     CompositeTypes: {
@@ -255,6 +359,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      agent_status: ["active", "draft", "paused", "archived"],
       team_role: ["admin", "member", "viewer"],
     },
   },

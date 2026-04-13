@@ -14,6 +14,7 @@ import ForgotPassword from "./pages/ForgotPassword.tsx";
 import ResetPassword from "./pages/ResetPassword.tsx";
 import Dashboard from "./pages/Dashboard.tsx";
 import Agents from "./pages/Agents.tsx";
+import AgentBuilder from "./pages/AgentBuilder.tsx";
 import Calls from "./pages/Calls.tsx";
 import Workflows from "./pages/Workflows.tsx";
 import Analytics from "./pages/Analytics.tsx";
@@ -40,6 +41,7 @@ const App = () => (
               <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/agents" element={<Agents />} />
+                <Route path="/agents/:agentId" element={<AgentBuilder />} />
                 <Route path="/calls" element={<Calls />} />
                 <Route path="/workflows" element={<Workflows />} />
                 <Route path="/analytics" element={<Analytics />} />
