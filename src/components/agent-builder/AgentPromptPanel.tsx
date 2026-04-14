@@ -91,6 +91,9 @@ export function AgentPromptPanel({
         </p>
       </div>
 
+      {/* Knowledge Base */}
+      <KnowledgeBaseSection />
+
       {/* Welcome Message */}
       <div className="border-t border-border px-4 py-3 space-y-2.5">
         <Label className="text-xs font-medium">Welcome Message</Label>
