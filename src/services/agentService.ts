@@ -6,6 +6,10 @@ export const VOICE_MAP: Record<string, string> = {
   "Echo": "cjVigY5qzO86Huf0OWal",     // Eric
   "Alloy": "Xb7hH8MSUJpSbSDYk0k2",   // Alice
   "Fable": "onwK4e9ZLuTAKqWW03F9",    // Daniel
+  "Neha": "8baRIHZEGj62eS9YHzC6",
+  "Roopa": "8i52rsySWGYoU4SRQCex",
+  "Sumeet": "X2jQeFZFwKyCkPx2OHSL",
+  "Ankush": "7c9GbBg3PCOqyDlCoB3z",
 };
 
 type Msg = { role: "user" | "assistant"; content: string };
