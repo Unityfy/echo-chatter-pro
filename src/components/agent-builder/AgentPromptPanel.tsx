@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BookOpen, Settings2, Upload, FileText, X, Database } from "lucide-react";
+import { BookOpen, Settings2, Upload, FileText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
