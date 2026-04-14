@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const KnowledgeBase = () => {
+  const [webUrl, setWebUrl] = useState("");
+  const [webPages, setWebPages] = useState<string[]>([]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
