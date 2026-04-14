@@ -23,7 +23,7 @@ interface AgentPromptPanelProps {
 }
 
 const MODELS = ["GPT-4.1", "GPT-4o", "GPT-3.5 Turbo", "Gemini Flash", "Claude 3.5"];
-const VOICES = ["Nova", "Onyx", "Shimmer", "Echo", "Alloy", "Fable"];
+const VOICES = ["Nova", "Onyx", "Shimmer", "Echo", "Alloy", "Fable", "Neha", "Roopa", "Sumeet", "Ankush"];
 const LANGUAGES = ["English", "Spanish", "French", "German", "Portuguese", "Japanese", "Hindi"];
 
 export function AgentPromptPanel({
