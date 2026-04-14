@@ -1,4 +1,5 @@
-import { BookOpen, Upload, FileText, Search } from "lucide-react";
+import { useState } from "react";
+import { BookOpen, Upload, FileText, Search, Globe, Plus, Link, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
