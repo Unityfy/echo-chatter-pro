@@ -408,15 +408,37 @@ function IntentKnowledgeBaseSection({ agentId }: { agentId?: string }) {
             return (
               <div key={intent.id} className="border border-border rounded-md p-3 space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Target className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-xs font-medium">{intent.name}</span>
-                  </div>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => deleteIntent(intent.id)}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
+                  {editingId === intent.id ? (
+                    <div className="flex-1 space-y-1.5 mr-2">
+                      <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-7 text-xs" />
+                      <Textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} className="text-xs min-h-[40px] resize-none" />
+                      <div className="flex gap-1.5">
+                        <Button variant="outline" size="sm" className="h-6 text-[10px] gap-1" onClick={saveEdit}>
+                          <Check className="h-2.5 w-2.5" /> Save
+                        </Button>
+                        <Button variant="ghost" size="sm" className="h-6 text-[10px]" onClick={() => setEditingId(null)}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <Target className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <span className="text-xs font-medium truncate">{intent.name}</span>
+                      </div>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground" onClick={() => startEditing(intent)}>
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => deleteIntent(intent.id)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </>
+                  )}
                 </div>
-                {intent.description && <p className="text-[10px] text-muted-foreground">{intent.description}</p>}
+                {editingId !== intent.id && intent.description && <p className="text-[10px] text-muted-foreground">{intent.description}</p>}
                 <div className="space-y-1">
                   <Label className="text-[10px] text-muted-foreground">KB Priority</Label>
                   <Select value={intent.kb_priority} onValueChange={(v) => updatePriority(intent.id, v)}>
