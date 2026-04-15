@@ -492,7 +492,8 @@ const KnowledgeBasePage = () => {
   };
 
   const resetSourceForm = () => {
-    setSourceUrl(""); setSourceText(""); setSourceFiles([]);
+    setSourceUrl(""); setSourceText(""); setSourceTextTitle(""); setTextPreview(false);
+    setSourceFiles([]);
     setUrlMode("single"); setAutoRefresh(false); setAutoCrawl(false);
     setExclusionList([]); setExclusionInput("");
     setUploadProgress({});
