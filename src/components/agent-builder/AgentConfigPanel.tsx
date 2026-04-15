@@ -265,7 +265,187 @@ function KnowledgeBaseSection({
   );
 }
 
+// ─── Intent-Based Knowledge Base Section ─────────────────────
+
+interface AgentIntent {
+  id: string;
+  name: string;
+  description: string;
+  kb_priority: string;
+}
+
+function IntentKnowledgeBaseSection({ agentId }: { agentId?: string }) {
+  const [intents, setIntents] = useState<AgentIntent[]>([]);
+  const [allKbs, setAllKbs] = useState<KBOption[]>([]);
+  const [intentKbMap, setIntentKbMap] = useState<Record<string, string[]>>({});
+  const [loading, setLoading] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  useEffect(() => {
+    if (!agentId) return;
+    const load = async () => {
+      setLoading(true);
+      const [intentRes, kbRes] = await Promise.all([
+        supabase.from("agent_intents").select("*").eq("agent_id", agentId).order("name"),
+        supabase.from("knowledge_bases").select("id, name, description").order("name"),
+      ]);
+      const fetchedIntents = (intentRes.data || []) as unknown as AgentIntent[];
+      setIntents(fetchedIntents);
+      setAllKbs((kbRes.data || []) as KBOption[]);
+
+      if (fetchedIntents.length > 0) {
+        const linkRes = await supabase
+          .from("agent_intent_knowledge_bases")
+          .select("intent_id, knowledge_base_id")
+          .in("intent_id", fetchedIntents.map((i) => i.id));
+        const map: Record<string, string[]> = {};
+        for (const link of linkRes.data || []) {
+          const l = link as any;
+          if (!map[l.intent_id]) map[l.intent_id] = [];
+          map[l.intent_id].push(l.knowledge_base_id);
+        }
+        setIntentKbMap(map);
+      }
+      setLoading(false);
+    };
+    load();
+  }, [agentId]);
+
+  const addIntent = async () => {
+    if (!agentId || !newName.trim()) return;
+    setAdding(true);
+    const { data, error } = await supabase
+      .from("agent_intents")
+      .insert({ agent_id: agentId, name: newName.trim(), description: newDesc.trim() } as any)
+      .select()
+      .single();
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "Intent name already exists" : "Failed to create intent");
+    } else if (data) {
+      setIntents((prev) => [...prev, data as unknown as AgentIntent]);
+      setNewName("");
+      setNewDesc("");
+      toast.success("Intent created");
+    }
+    setAdding(false);
+  };
+
+  const deleteIntent = async (intentId: string) => {
+    const { error } = await supabase.from("agent_intents").delete().eq("id", intentId);
+    if (error) {
+      toast.error("Failed to delete intent");
+    } else {
+      setIntents((prev) => prev.filter((i) => i.id !== intentId));
+      setIntentKbMap((prev) => { const next = { ...prev }; delete next[intentId]; return next; });
+      toast.success("Intent deleted");
+    }
+  };
+
+  const updatePriority = async (intentId: string, priority: string) => {
+    await supabase.from("agent_intents").update({ kb_priority: priority } as any).eq("id", intentId);
+    setIntents((prev) => prev.map((i) => (i.id === intentId ? { ...i, kb_priority: priority } : i)));
+  };
+
+  const linkIntentKb = async (intentId: string, kbId: string) => {
+    const { error } = await supabase
+      .from("agent_intent_knowledge_bases")
+      .insert({ intent_id: intentId, knowledge_base_id: kbId } as any);
+    if (!error) {
+      setIntentKbMap((prev) => ({ ...prev, [intentId]: [...(prev[intentId] || []), kbId] }));
+    }
+  };
+
+  const unlinkIntentKb = async (intentId: string, kbId: string) => {
+    await supabase.from("agent_intent_knowledge_bases").delete().eq("intent_id", intentId).eq("knowledge_base_id", kbId);
+    setIntentKbMap((prev) => ({ ...prev, [intentId]: (prev[intentId] || []).filter((id) => id !== kbId) }));
+  };
+
+  if (!agentId) return <p className="text-[11px] text-muted-foreground">Save the agent first to configure intents.</p>;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-[11px] text-muted-foreground">
+        Define conversation intents (e.g., "booking", "support") and attach specific knowledge bases. The system auto-detects intent and retrieves context from the relevant KB.
+      </p>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-2">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          <span className="text-xs text-muted-foreground">Loading intents...</span>
+        </div>
+      ) : (
+        <>
+          {intents.map((intent) => {
+            const linkedIds = intentKbMap[intent.id] || [];
+            const linkedKbs = allKbs.filter((kb) => linkedIds.includes(kb.id));
+            const availableKbs = allKbs.filter((kb) => !linkedIds.includes(kb.id));
+            return (
+              <div key={intent.id} className="border border-border rounded-md p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Target className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span className="text-xs font-medium">{intent.name}</span>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-destructive" onClick={() => deleteIntent(intent.id)}>
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+                {intent.description && <p className="text-[10px] text-muted-foreground">{intent.description}</p>}
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">KB Priority</Label>
+                  <Select value={intent.kb_priority} onValueChange={(v) => updatePriority(intent.id, v)}>
+                    <SelectTrigger className="h-7 text-[11px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="intent_first" className="text-xs">Intent KB first</SelectItem>
+                      <SelectItem value="equal" className="text-xs">Equal merge</SelectItem>
+                      <SelectItem value="agent_first" className="text-xs">Agent KB first</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {linkedKbs.length > 0 && (
+                  <div className="space-y-1">
+                    {linkedKbs.map((kb) => (
+                      <div key={kb.id} className="flex items-center gap-2 p-1.5 rounded bg-muted/50 border border-border">
+                        <BookOpen className="h-3 w-3 text-muted-foreground shrink-0" />
+                        <span className="text-[11px] flex-1 truncate">{kb.name}</span>
+                        <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" onClick={() => unlinkIntentKb(intent.id, kb.id)}>
+                          <X className="h-2.5 w-2.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {availableKbs.length > 0 && (
+                  <Select onValueChange={(v) => linkIntentKb(intent.id, v)}>
+                    <SelectTrigger className="h-7 text-[11px]"><SelectValue placeholder="Link a KB..." /></SelectTrigger>
+                    <SelectContent>
+                      {availableKbs.map((kb) => (
+                        <SelectItem key={kb.id} value={kb.id} className="text-xs">{kb.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            );
+          })}
+          <div className="border border-dashed border-border rounded-md p-3 space-y-2">
+            <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Intent name (e.g., booking)" className="h-7 text-xs" />
+            <Textarea value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="Description — helps the AI detect this intent" className="text-xs min-h-[50px] resize-none" />
+            <Button variant="outline" size="sm" className="w-full text-xs gap-1.5" onClick={addIntent} disabled={adding || !newName.trim()}>
+              {adding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Add Intent
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Other Sections (unchanged) ─────────────────────────────
+
 
 function SpeechSettingsSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
   const speed = (config.speed as number) ?? 1.0;
