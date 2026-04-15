@@ -12,6 +12,13 @@ export const VOICE_MAP: Record<string, string> = {
   "Ankush": "7c9GbBg3PCOqyDlCoB3z",
 };
 
+export type RAGDebugInfo = {
+  detected_intent: string | null;
+  intent_priority: string | null;
+  chunks: { source: string; origin: "agent" | "intent"; similarity: number; preview: string }[];
+  settings: { chunksToRetrieve: number; similarityThreshold: number };
+} | null;
+
 type Msg = { role: "user" | "assistant"; content: string };
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-chat`;
@@ -30,20 +37,24 @@ const headers = () => ({
 export async function streamAgentChat({
   messages,
   systemPrompt,
+  agentId,
   onDelta,
   onDone,
+  onDebug,
   signal,
 }: {
   messages: Msg[];
   systemPrompt: string;
+  agentId?: string;
   onDelta: (text: string) => void;
   onDone: () => void;
+  onDebug?: (debug: RAGDebugInfo) => void;
   signal?: AbortSignal;
 }) {
   const resp = await fetch(CHAT_URL, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ messages, systemPrompt }),
+    body: JSON.stringify({ messages, systemPrompt, agentId }),
     signal,
   });
 
