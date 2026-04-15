@@ -1,15 +1,73 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+async function getRAGContext(
+  query: string,
+  agentId: string,
+  lovableApiKey: string,
+  supabaseUrl: string,
+  serviceRoleKey: string
+): Promise<string> {
+  try {
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+    // Get linked knowledge base IDs for this agent
+    const { data: links } = await supabase
+      .from("agent_knowledge_bases")
+      .select("knowledge_base_id")
+      .eq("agent_id", agentId);
+
+    if (!links || links.length === 0) return "";
+
+    const kbIds = links.map((l: any) => l.knowledge_base_id);
+
+    // Generate embedding for the query
+    const embResp = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${lovableApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: query,
+        dimensions: 768,
+      }),
+    });
+
+    if (!embResp.ok) return "";
+    const embData = await embResp.json();
+    const queryEmbedding = embData.data[0].embedding;
+
+    // Search for relevant chunks
+    const { data: chunks } = await supabase.rpc("search_knowledge_chunks", {
+      _query_embedding: JSON.stringify(queryEmbedding),
+      _knowledge_base_ids: kbIds,
+      _match_count: 5,
+      _match_threshold: 0.5,
+    });
+
+    if (!chunks || chunks.length === 0) return "";
+
+    return "\n\n--- Relevant Knowledge ---\n" +
+      chunks.map((c: any) => c.content).join("\n\n") +
+      "\n--- End Knowledge ---\n";
+  } catch (e) {
+    console.error("RAG retrieval error:", e);
+    return "";
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { messages, systemPrompt, model } = await req.json();
+    const { messages, systemPrompt, model, agentId } = await req.json();
 
     if (!messages || !Array.isArray(messages)) {
       return new Response(JSON.stringify({ error: "messages array is required" }), {
@@ -26,6 +84,23 @@ serve(async (req) => {
       });
     }
 
+    // RAG: retrieve relevant knowledge from the latest user message
+    let ragContext = "";
+    if (agentId) {
+      const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
+      if (lastUserMsg) {
+        ragContext = await getRAGContext(
+          lastUserMsg.content,
+          agentId,
+          LOVABLE_API_KEY,
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+        );
+      }
+    }
+
+    const systemContent = (systemPrompt || "You are a helpful AI voice agent. Keep responses concise and conversational, as they will be spoken aloud.") + ragContext;
+
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -35,10 +110,7 @@ serve(async (req) => {
       body: JSON.stringify({
         model: model || "google/gemini-3-flash-preview",
         messages: [
-          {
-            role: "system",
-            content: systemPrompt || "You are a helpful AI voice agent. Keep responses concise and conversational, as they will be spoken aloud.",
-          },
+          { role: "system", content: systemContent },
           ...messages,
         ],
         stream: true,
