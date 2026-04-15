@@ -49,6 +49,42 @@ export type Database = {
           },
         ]
       }
+      agent_knowledge_bases: {
+        Row: {
+          agent_id: string
+          created_at: string
+          id: string
+          knowledge_base_id: string
+        }
+        Insert: {
+          agent_id: string
+          created_at?: string
+          id?: string
+          knowledge_base_id: string
+        }
+        Update: {
+          agent_id?: string
+          created_at?: string
+          id?: string
+          knowledge_base_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_knowledge_bases_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_knowledge_bases_knowledge_base_id_fkey"
+            columns: ["knowledge_base_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_bases"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       agents: {
         Row: {
           calls: number | null
@@ -113,6 +149,135 @@ export type Database = {
             columns: ["team_id"]
             isOneToOne: false
             referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      knowledge_bases: {
+        Row: {
+          created_at: string
+          created_by: string
+          description: string | null
+          id: string
+          name: string
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          description?: string | null
+          id?: string
+          name: string
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          description?: string | null
+          id?: string
+          name?: string
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "knowledge_bases_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      knowledge_chunks: {
+        Row: {
+          chunk_index: number
+          content: string
+          created_at: string
+          embedding: string | null
+          id: string
+          metadata: Json | null
+          source_id: string
+        }
+        Insert: {
+          chunk_index?: number
+          content: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          metadata?: Json | null
+          source_id: string
+        }
+        Update: {
+          chunk_index?: number
+          content?: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          metadata?: Json | null
+          source_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "knowledge_chunks_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      knowledge_sources: {
+        Row: {
+          chunk_count: number | null
+          content_text: string | null
+          created_at: string
+          error_message: string | null
+          file_name: string | null
+          file_path: string | null
+          id: string
+          knowledge_base_id: string
+          source_url: string | null
+          status: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          chunk_count?: number | null
+          content_text?: string | null
+          created_at?: string
+          error_message?: string | null
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          knowledge_base_id: string
+          source_url?: string | null
+          status?: string
+          type: string
+          updated_at?: string
+        }
+        Update: {
+          chunk_count?: number | null
+          content_text?: string | null
+          created_at?: string
+          error_message?: string | null
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          knowledge_base_id?: string
+          source_url?: string | null
+          status?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "knowledge_sources_knowledge_base_id_fkey"
+            columns: ["knowledge_base_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_bases"
             referencedColumns: ["id"]
           },
         ]
