@@ -99,6 +99,8 @@ function relativeTime(dateStr: string | null) {
 function sourceLabel(src: KnowledgeSource) {
   if (src.type === "url") return src.source_url || "URL";
   if (src.type === "file") return src.file_name || "File";
+  // For text: use file_name as title if set, otherwise preview content
+  if (src.file_name) return src.file_name;
   const preview = src.content_text?.slice(0, 60) || "Text";
   return preview.length >= 60 ? preview + "…" : preview;
 }
