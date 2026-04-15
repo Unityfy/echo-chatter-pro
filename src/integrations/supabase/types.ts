@@ -233,12 +233,17 @@ export type Database = {
         Row: {
           chunk_count: number | null
           content_text: string | null
+          crawl_config: Json | null
+          crawl_status: string | null
           created_at: string
+          discovered_urls_count: number | null
           error_message: string | null
           file_name: string | null
           file_path: string | null
           id: string
           knowledge_base_id: string
+          last_refreshed_at: string | null
+          parent_source_id: string | null
           source_url: string | null
           status: string
           type: string
@@ -247,12 +252,17 @@ export type Database = {
         Insert: {
           chunk_count?: number | null
           content_text?: string | null
+          crawl_config?: Json | null
+          crawl_status?: string | null
           created_at?: string
+          discovered_urls_count?: number | null
           error_message?: string | null
           file_name?: string | null
           file_path?: string | null
           id?: string
           knowledge_base_id: string
+          last_refreshed_at?: string | null
+          parent_source_id?: string | null
           source_url?: string | null
           status?: string
           type: string
@@ -261,12 +271,17 @@ export type Database = {
         Update: {
           chunk_count?: number | null
           content_text?: string | null
+          crawl_config?: Json | null
+          crawl_status?: string | null
           created_at?: string
+          discovered_urls_count?: number | null
           error_message?: string | null
           file_name?: string | null
           file_path?: string | null
           id?: string
           knowledge_base_id?: string
+          last_refreshed_at?: string | null
+          parent_source_id?: string | null
           source_url?: string | null
           status?: string
           type?: string
@@ -278,6 +293,13 @@ export type Database = {
             columns: ["knowledge_base_id"]
             isOneToOne: false
             referencedRelation: "knowledge_bases"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "knowledge_sources_parent_source_id_fkey"
+            columns: ["parent_source_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_sources"
             referencedColumns: ["id"]
           },
         ]
