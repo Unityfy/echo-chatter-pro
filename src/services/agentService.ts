@@ -63,7 +63,14 @@ export async function streamAgentChat({
     throw new Error(err.error || `Chat failed: ${resp.status}`);
   }
 
-  if (!resp.body) throw new Error("No response body");
+  // Parse debug header
+  const debugHeader = resp.headers.get("X-RAG-Debug");
+  if (debugHeader && onDebug) {
+    try {
+      onDebug(JSON.parse(decodeURIComponent(debugHeader)));
+    } catch { /* ignore */ }
+  }
+
 
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
