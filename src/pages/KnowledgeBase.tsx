@@ -1070,9 +1070,54 @@ const KnowledgeBasePage = () => {
             </TabsContent>
 
             <TabsContent value="text" className="space-y-3 pt-3">
-              <Label>Text Content</Label>
-              <Textarea placeholder="Paste your content here..." rows={6} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />
-              <p className="text-xs text-muted-foreground">Raw text will be chunked and indexed.</p>
+              <div className="space-y-2">
+                <Label>Title <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <Input
+                  placeholder="e.g. Return Policy FAQ, Onboarding Steps"
+                  value={sourceTextTitle}
+                  onChange={(e) => setSourceTextTitle(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Text Content</Label>
+                  {sourceText.trim() && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs gap-1"
+                      onClick={() => setTextPreview(!textPreview)}
+                    >
+                      {textPreview ? <Pencil className="h-3 w-3" /> : <BookOpen className="h-3 w-3" />}
+                      {textPreview ? "Edit" : "Preview"}
+                    </Button>
+                  )}
+                </div>
+                {textPreview ? (
+                  <div className="rounded-md border border-border bg-muted/30 p-3 min-h-[160px] max-h-[300px] overflow-y-auto">
+                    {sourceTextTitle && (
+                      <p className="font-medium text-sm text-foreground mb-2">{sourceTextTitle}</p>
+                    )}
+                    <p className="text-sm text-foreground whitespace-pre-wrap">{sourceText}</p>
+                  </div>
+                ) : (
+                  <Textarea
+                    placeholder="Paste your content here — FAQs, instructions, internal data..."
+                    rows={7}
+                    value={sourceText}
+                    onChange={(e) => setSourceText(e.target.value)}
+                  />
+                )}
+              </div>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">
+                  {sourceText.trim().split(/\s+/).filter(Boolean).length} words · Max 50 snippets per KB
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {sources.filter(s => s.type === "text" && !s.parent_source_id).length}/50 snippets
+                </p>
+              </div>
             </TabsContent>
           </Tabs>
 
