@@ -346,7 +346,28 @@ function IntentKnowledgeBaseSection({ agentId }: { agentId?: string }) {
     }
   };
 
-  const updatePriority = async (intentId: string, priority: string) => {
+  const startEditing = (intent: AgentIntent) => {
+    setEditingId(intent.id);
+    setEditName(intent.name);
+    setEditDesc(intent.description || "");
+  };
+
+  const saveEdit = async () => {
+    if (!editingId || !editName.trim()) return;
+    const { error } = await supabase
+      .from("agent_intents")
+      .update({ name: editName.trim(), description: editDesc.trim() } as any)
+      .eq("id", editingId);
+    if (error) {
+      toast.error(error.message.includes("duplicate") ? "Intent name already exists" : "Failed to update");
+    } else {
+      setIntents((prev) => prev.map((i) => i.id === editingId ? { ...i, name: editName.trim(), description: editDesc.trim() } : i));
+      setEditingId(null);
+      toast.success("Intent updated");
+    }
+  };
+
+
     await supabase.from("agent_intents").update({ kb_priority: priority } as any).eq("id", intentId);
     setIntents((prev) => prev.map((i) => (i.id === intentId ? { ...i, kb_priority: priority } : i)));
   };
