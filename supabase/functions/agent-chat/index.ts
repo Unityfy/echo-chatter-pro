@@ -6,8 +6,49 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+/**
+ * Build a concise search query from the conversation transcript.
+ * Uses the last 3 user messages to capture recent context without bloating the embedding input.
+ */
+function buildTranscriptQuery(messages: { role: string; content: string }[]): string {
+  const userMsgs = messages.filter((m) => m.role === "user").slice(-3);
+  return userMsgs.map((m) => m.content).join("\n");
+}
+
+/**
+ * Fetch agent-specific retrieval settings from agent_configs.
+ */
+async function getRetrievalSettings(
+  supabase: any,
+  agentId: string
+): Promise<{ chunksToRetrieve: number; similarityThreshold: number }> {
+  const defaults = { chunksToRetrieve: 3, similarityThreshold: 0.6 };
+  try {
+    const { data } = await supabase
+      .from("agent_configs")
+      .select("config")
+      .eq("agent_id", agentId)
+      .eq("section", "knowledge")
+      .maybeSingle();
+
+    if (data?.config) {
+      return {
+        chunksToRetrieve: Number(data.config.chunksToRetrieve) || defaults.chunksToRetrieve,
+        similarityThreshold: Number(data.config.similarityThreshold) || defaults.similarityThreshold,
+      };
+    }
+  } catch (e) {
+    console.error("Failed to fetch retrieval settings:", e);
+  }
+  return defaults;
+}
+
+/**
+ * Retrieve relevant knowledge chunks using the conversation transcript.
+ * Groups results by source for cleaner context injection.
+ */
 async function getRAGContext(
-  query: string,
+  transcriptQuery: string,
   agentId: string,
   lovableApiKey: string,
   supabaseUrl: string,
@@ -16,17 +57,21 @@ async function getRAGContext(
   try {
     const supabase = createClient(supabaseUrl, serviceRoleKey);
 
-    // Get linked knowledge base IDs for this agent
-    const { data: links } = await supabase
-      .from("agent_knowledge_bases")
-      .select("knowledge_base_id")
-      .eq("agent_id", agentId);
+    // Parallel: fetch KB links + retrieval settings
+    const [linksResult, settings] = await Promise.all([
+      supabase
+        .from("agent_knowledge_bases")
+        .select("knowledge_base_id")
+        .eq("agent_id", agentId),
+      getRetrievalSettings(supabase, agentId),
+    ]);
 
+    const links = linksResult.data;
     if (!links || links.length === 0) return "";
 
     const kbIds = links.map((l: any) => l.knowledge_base_id);
 
-    // Generate embedding for the query
+    // Generate embedding from transcript
     const embResp = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
       method: "POST",
       headers: {
@@ -35,7 +80,7 @@ async function getRAGContext(
       },
       body: JSON.stringify({
         model: "text-embedding-3-small",
-        input: query,
+        input: transcriptQuery,
         dimensions: 768,
       }),
     });
@@ -44,19 +89,31 @@ async function getRAGContext(
     const embData = await embResp.json();
     const queryEmbedding = embData.data[0].embedding;
 
-    // Search for relevant chunks
+    // Vector search with agent-specific settings
     const { data: chunks } = await supabase.rpc("search_knowledge_chunks", {
       _query_embedding: JSON.stringify(queryEmbedding),
       _knowledge_base_ids: kbIds,
-      _match_count: 5,
-      _match_threshold: 0.5,
+      _match_count: settings.chunksToRetrieve,
+      _match_threshold: settings.similarityThreshold,
     });
 
     if (!chunks || chunks.length === 0) return "";
 
-    return "\n\n--- Relevant Knowledge ---\n" +
-      chunks.map((c: any) => c.content).join("\n\n") +
-      "\n--- End Knowledge ---\n";
+    // Group chunks by source for cleaner context
+    const grouped: Record<string, string[]> = {};
+    for (const c of chunks) {
+      const source = c.metadata?.source_name || c.metadata?.file_name || "Knowledge Base";
+      if (!grouped[source]) grouped[source] = [];
+      grouped[source].push(c.content);
+    }
+
+    let context = "## Related Knowledge Base Contexts\n\n";
+    for (const [source, contents] of Object.entries(grouped)) {
+      context += `### ${source}\n`;
+      context += contents.join("\n\n") + "\n\n";
+    }
+
+    return context;
   } catch (e) {
     console.error("RAG retrieval error:", e);
     return "";
@@ -84,13 +141,13 @@ serve(async (req) => {
       });
     }
 
-    // RAG: retrieve relevant knowledge from the latest user message
+    // RAG: retrieve using conversation transcript (not system prompt)
     let ragContext = "";
     if (agentId) {
-      const lastUserMsg = [...messages].reverse().find((m: any) => m.role === "user");
-      if (lastUserMsg) {
+      const transcriptQuery = buildTranscriptQuery(messages);
+      if (transcriptQuery) {
         ragContext = await getRAGContext(
-          lastUserMsg.content,
+          transcriptQuery,
           agentId,
           LOVABLE_API_KEY,
           Deno.env.get("SUPABASE_URL")!,
@@ -99,7 +156,24 @@ serve(async (req) => {
       }
     }
 
-    const systemContent = (systemPrompt || "You are a helpful AI voice agent. Keep responses concise and conversational, as they will be spoken aloud.") + ragContext;
+    const systemContent = systemPrompt || "You are a helpful AI voice agent. Keep responses concise and conversational, as they will be spoken aloud.";
+
+    // Build message array: system → RAG context (as separate user msg) → conversation
+    const llmMessages: any[] = [{ role: "system", content: systemContent }];
+
+    if (ragContext) {
+      // Inject RAG as a separate context message before the conversation
+      llmMessages.push({
+        role: "user",
+        content: ragContext + "\nUse the above knowledge base contexts to inform your responses when relevant. Do not mention that you received this context.",
+      });
+      llmMessages.push({
+        role: "assistant",
+        content: "Understood. I'll use this context to provide informed responses.",
+      });
+    }
+
+    llmMessages.push(...messages);
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -109,10 +183,7 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         model: model || "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemContent },
-          ...messages,
-        ],
+        messages: llmMessages,
         stream: true,
       }),
     });
