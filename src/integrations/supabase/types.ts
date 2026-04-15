@@ -393,6 +393,20 @@ export type Database = {
         Args: { _team_id: string; _user_id: string }
         Returns: boolean
       }
+      search_knowledge_chunks: {
+        Args: {
+          _knowledge_base_ids: string[]
+          _match_count?: number
+          _match_threshold?: number
+          _query_embedding: string
+        }
+        Returns: {
+          content: string
+          id: string
+          metadata: Json
+          similarity: number
+        }[]
+      }
     }
     Enums: {
       agent_status: "active" | "draft" | "paused" | "archived"
