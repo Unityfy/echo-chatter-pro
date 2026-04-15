@@ -3,7 +3,7 @@ import {
   BookOpen, Plus, Trash2, Globe, FileText, Type, Loader2,
   CheckCircle2, AlertCircle, RefreshCw, Pencil, Search,
   MoreHorizontal, Clock, Database, Settings2, Link2, X,
-  ChevronDown, ChevronRight, Zap,
+  ChevronDown, ChevronRight, Zap, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
