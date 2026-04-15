@@ -367,7 +367,7 @@ function IntentKnowledgeBaseSection({ agentId }: { agentId?: string }) {
     }
   };
 
-
+  const updatePriority = async (intentId: string, priority: string) => {
     await supabase.from("agent_intents").update({ kb_priority: priority } as any).eq("id", intentId);
     setIntents((prev) => prev.map((i) => (i.id === intentId ? { ...i, kb_priority: priority } : i)));
   };
