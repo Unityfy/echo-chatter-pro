@@ -131,6 +131,8 @@ const KnowledgeBasePage = () => {
   const [sourceType, setSourceType] = useState<"url" | "text" | "file">("url");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceText, setSourceText] = useState("");
+  const [sourceTextTitle, setSourceTextTitle] = useState("");
+  const [textPreview, setTextPreview] = useState(false);
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [addingSource, setAddingSource] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
