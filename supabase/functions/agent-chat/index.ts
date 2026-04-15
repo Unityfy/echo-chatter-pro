@@ -6,18 +6,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-/**
- * Build a concise search query from the conversation transcript.
- * Uses the last 3 user messages to capture recent context without bloating the embedding input.
- */
+// ─── Helpers ─────────────────────────────────────────────────
+
 function buildTranscriptQuery(messages: { role: string; content: string }[]): string {
-  const userMsgs = messages.filter((m) => m.role === "user").slice(-3);
-  return userMsgs.map((m) => m.content).join("\n");
+  return messages.filter((m) => m.role === "user").slice(-3).map((m) => m.content).join("\n");
 }
 
-/**
- * Fetch agent-specific retrieval settings from agent_configs.
- */
 async function getRetrievalSettings(
   supabase: any,
   agentId: string
@@ -30,7 +24,6 @@ async function getRetrievalSettings(
       .eq("agent_id", agentId)
       .eq("section", "knowledge")
       .maybeSingle();
-
     if (data?.config) {
       return {
         chunksToRetrieve: Number(data.config.chunksToRetrieve) || defaults.chunksToRetrieve,
@@ -43,10 +36,126 @@ async function getRetrievalSettings(
   return defaults;
 }
 
-/**
- * Retrieve relevant knowledge chunks using the conversation transcript.
- * Groups results by source for cleaner context injection.
- */
+// ─── Embedding ───────────────────────────────────────────────
+
+async function getEmbedding(text: string, apiKey: string): Promise<number[] | null> {
+  try {
+    const resp = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "text-embedding-3-small", input: text, dimensions: 768 }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data.data[0].embedding;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Vector search ───────────────────────────────────────────
+
+async function searchChunks(
+  supabase: any,
+  embedding: number[],
+  kbIds: string[],
+  matchCount: number,
+  threshold: number
+): Promise<{ content: string; metadata: any; similarity: number }[]> {
+  if (kbIds.length === 0) return [];
+  const { data } = await supabase.rpc("search_knowledge_chunks", {
+    _query_embedding: JSON.stringify(embedding),
+    _knowledge_base_ids: kbIds,
+    _match_count: matchCount,
+    _match_threshold: threshold,
+  });
+  return data || [];
+}
+
+// ─── Intent detection ────────────────────────────────────────
+
+interface IntentWithKbs {
+  id: string;
+  name: string;
+  description: string;
+  kb_priority: string;
+  kb_ids: string[];
+}
+
+async function detectIntent(
+  transcript: string,
+  intents: IntentWithKbs[],
+  apiKey: string
+): Promise<IntentWithKbs | null> {
+  if (intents.length === 0) return null;
+  try {
+    const intentList = intents.map((i) => `- "${i.name}": ${i.description || i.name}`).join("\n");
+    const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          {
+            role: "system",
+            content: `You are an intent classifier. Given a conversation transcript and a list of intents, output ONLY the intent name that best matches. If none match, output "none".\n\nIntents:\n${intentList}`,
+          },
+          { role: "user", content: transcript },
+        ],
+        max_tokens: 20,
+        temperature: 0,
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const detected = (data.choices?.[0]?.message?.content || "").trim().toLowerCase().replace(/"/g, "");
+    return intents.find((i) => i.name.toLowerCase() === detected) || null;
+  } catch (e) {
+    console.error("Intent detection error:", e);
+    return null;
+  }
+}
+
+// ─── Fetch agent intents with their KB IDs ───────────────────
+
+async function getAgentIntents(supabase: any, agentId: string): Promise<IntentWithKbs[]> {
+  const { data: intents } = await supabase
+    .from("agent_intents")
+    .select("id, name, description, kb_priority")
+    .eq("agent_id", agentId);
+  if (!intents || intents.length === 0) return [];
+
+  const { data: links } = await supabase
+    .from("agent_intent_knowledge_bases")
+    .select("intent_id, knowledge_base_id")
+    .in("intent_id", intents.map((i: any) => i.id));
+
+  const kbMap: Record<string, string[]> = {};
+  for (const l of links || []) {
+    if (!kbMap[l.intent_id]) kbMap[l.intent_id] = [];
+    kbMap[l.intent_id].push(l.knowledge_base_id);
+  }
+
+  return intents.map((i: any) => ({ ...i, kb_ids: kbMap[i.id] || [] }));
+}
+
+// ─── RAG context builder ────────────────────────────────────
+
+function formatChunks(chunks: { content: string; metadata: any }[], label: string): string {
+  if (chunks.length === 0) return "";
+  const grouped: Record<string, string[]> = {};
+  for (const c of chunks) {
+    const source = c.metadata?.source_name || c.metadata?.file_name || label;
+    if (!grouped[source]) grouped[source] = [];
+    grouped[source].push(c.content);
+  }
+  let ctx = "";
+  for (const [source, contents] of Object.entries(grouped)) {
+    ctx += `### ${source}\n${contents.join("\n\n")}\n\n`;
+  }
+  return ctx;
+}
+
 async function getRAGContext(
   transcriptQuery: string,
   agentId: string,
@@ -55,70 +164,69 @@ async function getRAGContext(
   serviceRoleKey: string
 ): Promise<string> {
   try {
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const sb = createClient(supabaseUrl, serviceRoleKey);
 
-    // Parallel: fetch KB links + retrieval settings
-    const [linksResult, settings] = await Promise.all([
-      supabase
-        .from("agent_knowledge_bases")
-        .select("knowledge_base_id")
-        .eq("agent_id", agentId),
-      getRetrievalSettings(supabase, agentId),
+    // Parallel: agent KB IDs, retrieval settings, intents
+    const [linksResult, settings, intents] = await Promise.all([
+      sb.from("agent_knowledge_bases").select("knowledge_base_id").eq("agent_id", agentId),
+      getRetrievalSettings(sb, agentId),
+      getAgentIntents(sb, agentId),
     ]);
 
-    const links = linksResult.data;
-    if (!links || links.length === 0) return "";
+    const agentKbIds = (linksResult.data || []).map((l: any) => l.knowledge_base_id);
+    const hasIntents = intents.some((i) => i.kb_ids.length > 0);
 
-    const kbIds = links.map((l: any) => l.knowledge_base_id);
+    // If no KBs at all, bail
+    if (agentKbIds.length === 0 && !hasIntents) return "";
 
-    // Generate embedding from transcript
-    const embResp = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "text-embedding-3-small",
-        input: transcriptQuery,
-        dimensions: 768,
-      }),
-    });
+    // Generate embedding
+    const embedding = await getEmbedding(transcriptQuery, lovableApiKey);
+    if (!embedding) return "";
 
-    if (!embResp.ok) return "";
-    const embData = await embResp.json();
-    const queryEmbedding = embData.data[0].embedding;
+    // Detect intent (parallel with agent KB search)
+    const [agentChunks, detectedIntent] = await Promise.all([
+      agentKbIds.length > 0
+        ? searchChunks(sb, embedding, agentKbIds, settings.chunksToRetrieve, settings.similarityThreshold)
+        : Promise.resolve([]),
+      hasIntents ? detectIntent(transcriptQuery, intents, lovableApiKey) : Promise.resolve(null),
+    ]);
 
-    // Vector search with agent-specific settings
-    const { data: chunks } = await supabase.rpc("search_knowledge_chunks", {
-      _query_embedding: JSON.stringify(queryEmbedding),
-      _knowledge_base_ids: kbIds,
-      _match_count: settings.chunksToRetrieve,
-      _match_threshold: settings.similarityThreshold,
-    });
-
-    if (!chunks || chunks.length === 0) return "";
-
-    // Group chunks by source for cleaner context
-    const grouped: Record<string, string[]> = {};
-    for (const c of chunks) {
-      const source = c.metadata?.source_name || c.metadata?.file_name || "Knowledge Base";
-      if (!grouped[source]) grouped[source] = [];
-      grouped[source].push(c.content);
+    // Search intent-specific KBs if detected
+    let intentChunks: typeof agentChunks = [];
+    let priority = "equal";
+    if (detectedIntent && detectedIntent.kb_ids.length > 0) {
+      priority = detectedIntent.kb_priority;
+      intentChunks = await searchChunks(
+        sb, embedding, detectedIntent.kb_ids, settings.chunksToRetrieve, settings.similarityThreshold
+      );
     }
 
+    // Merge based on priority
     let context = "## Related Knowledge Base Contexts\n\n";
-    for (const [source, contents] of Object.entries(grouped)) {
-      context += `### ${source}\n`;
-      context += contents.join("\n\n") + "\n\n";
+
+    if (priority === "intent_first") {
+      context += formatChunks(intentChunks, `Intent: ${detectedIntent?.name}`);
+      context += formatChunks(agentChunks, "Knowledge Base");
+    } else if (priority === "agent_first") {
+      context += formatChunks(agentChunks, "Knowledge Base");
+      context += formatChunks(intentChunks, `Intent: ${detectedIntent?.name}`);
+    } else {
+      // Equal: interleave by similarity
+      const all = [
+        ...agentChunks.map((c) => ({ ...c, _src: "agent" })),
+        ...intentChunks.map((c) => ({ ...c, _src: detectedIntent?.name || "intent" })),
+      ].sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+      context += formatChunks(all, "Knowledge Base");
     }
 
-    return context;
+    return context.trim() === "## Related Knowledge Base Contexts" ? "" : context;
   } catch (e) {
     console.error("RAG retrieval error:", e);
     return "";
   }
 }
+
+// ─── Main handler ────────────────────────────────────────────
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -128,41 +236,32 @@ serve(async (req) => {
 
     if (!messages || !Array.isArray(messages)) {
       return new Response(JSON.stringify({ error: "messages array is required" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       return new Response(JSON.stringify({ error: "LOVABLE_API_KEY is not configured" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // RAG: retrieve using conversation transcript (not system prompt)
     let ragContext = "";
     if (agentId) {
       const transcriptQuery = buildTranscriptQuery(messages);
       if (transcriptQuery) {
         ragContext = await getRAGContext(
-          transcriptQuery,
-          agentId,
-          LOVABLE_API_KEY,
-          Deno.env.get("SUPABASE_URL")!,
-          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+          transcriptQuery, agentId, LOVABLE_API_KEY,
+          Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
         );
       }
     }
 
     const systemContent = systemPrompt || "You are a helpful AI voice agent. Keep responses concise and conversational, as they will be spoken aloud.";
-
-    // Build message array: system → RAG context (as separate user msg) → conversation
     const llmMessages: any[] = [{ role: "system", content: systemContent }];
 
     if (ragContext) {
-      // Inject RAG as a separate context message before the conversation
       llmMessages.push({
         role: "user",
         content: ragContext + "\nUse the above knowledge base contexts to inform your responses when relevant. Do not mention that you received this context.",
@@ -177,35 +276,25 @@ serve(async (req) => {
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: model || "google/gemini-3-flash-preview",
-        messages: llmMessages,
-        stream: true,
-      }),
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: model || "google/gemini-3-flash-preview", messages: llmMessages, stream: true }),
     });
 
     if (!response.ok) {
       if (response.status === 429) {
         return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       if (response.status === 402) {
         return new Response(JSON.stringify({ error: "Credits exhausted. Please add funds in Settings > Workspace > Usage." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
       const t = await response.text();
       console.error("AI gateway error:", response.status, t);
       return new Response(JSON.stringify({ error: "AI gateway error" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -215,8 +304,7 @@ serve(async (req) => {
   } catch (e) {
     console.error("agent-chat error:", e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
