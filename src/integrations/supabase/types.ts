@@ -49,6 +49,80 @@ export type Database = {
           },
         ]
       }
+      agent_intent_knowledge_bases: {
+        Row: {
+          created_at: string
+          id: string
+          intent_id: string
+          knowledge_base_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          intent_id: string
+          knowledge_base_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          intent_id?: string
+          knowledge_base_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_intent_knowledge_bases_intent_id_fkey"
+            columns: ["intent_id"]
+            isOneToOne: false
+            referencedRelation: "agent_intents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agent_intent_knowledge_bases_knowledge_base_id_fkey"
+            columns: ["knowledge_base_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_bases"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      agent_intents: {
+        Row: {
+          agent_id: string
+          created_at: string
+          description: string | null
+          id: string
+          kb_priority: string
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          agent_id: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          kb_priority?: string
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          agent_id?: string
+          created_at?: string
+          description?: string | null
+          id?: string
+          kb_priority?: string
+          name?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_intents_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       agent_knowledge_bases: {
         Row: {
           agent_id: string
