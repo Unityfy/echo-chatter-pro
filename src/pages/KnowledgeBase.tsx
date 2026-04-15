@@ -3,7 +3,7 @@ import {
   BookOpen, Plus, Trash2, Globe, FileText, Type, Loader2,
   CheckCircle2, AlertCircle, RefreshCw, Pencil, Search,
   MoreHorizontal, Clock, Database, Settings2, Link2, X,
-  ChevronDown, ChevronRight, Zap,
+  ChevronDown, ChevronRight, Zap, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -130,8 +131,9 @@ const KnowledgeBasePage = () => {
   const [sourceType, setSourceType] = useState<"url" | "text" | "file">("url");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceText, setSourceText] = useState("");
-  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [addingSource, setAddingSource] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
 
   // URL crawl settings
   const [urlMode, setUrlMode] = useState<"single" | "crawl">("single");
@@ -308,26 +310,26 @@ const KnowledgeBasePage = () => {
     if (!selectedKb) return;
     setAddingSource(true);
 
-    let contentText = "";
-    let fileName = "";
-
     if (sourceType === "url" && !sourceUrl.trim()) { toast.error("Enter a URL"); setAddingSource(false); return; }
     if (sourceType === "text" && !sourceText.trim()) { toast.error("Enter text content"); setAddingSource(false); return; }
     if (sourceType === "file") {
-      if (!sourceFile) { toast.error("Select a file"); setAddingSource(false); return; }
-      contentText = await sourceFile.text();
-      fileName = sourceFile.name;
+      if (sourceFiles.length === 0) { toast.error("Select files"); setAddingSource(false); return; }
+      // Check file count limit
+      const existingFiles = sources.filter(s => s.type === "file" && !s.parent_source_id).length;
+      if (existingFiles + sourceFiles.length > 25) {
+        toast.error(`Max 25 files per knowledge base (${existingFiles} existing)`);
+        setAddingSource(false);
+        return;
+      }
     }
 
     if (sourceType === "url") {
-      // URL-specific insert with crawl config
       const crawlConfig: CrawlConfig = {
         auto_refresh: autoRefresh,
         auto_crawl: urlMode === "crawl" ? true : autoCrawl,
         exclusion_list: exclusionList,
         max_urls: 500,
       };
-
       const insertData: any = {
         knowledge_base_id: selectedKb.id,
         type: "url",
@@ -335,37 +337,113 @@ const KnowledgeBasePage = () => {
         status: "pending",
         crawl_config: crawlConfig,
       };
-
       const { data, error } = await supabase.from("knowledge_sources").insert(insertData).select().single();
       if (error) { toast.error("Failed to add source"); setAddingSource(false); return; }
-
       resetSourceForm();
       setAddSourceOpen(false);
       setAddingSource(false);
-
       if (data) triggerCrawl((data as any).id, urlMode);
       fetchSources(selectedKb.id);
       return;
     }
 
-    // Non-URL sources
+    if (sourceType === "file") {
+      // Upload files to storage and create sources
+      for (const file of sourceFiles) {
+        if (file.size > 50 * 1024 * 1024) {
+          toast.error(`${file.name} exceeds 50MB limit`);
+          continue;
+        }
+        const ext = file.name.split(".").pop()?.toLowerCase();
+        if (!["pdf", "docx", "txt", "csv", "xlsx", "xls"].includes(ext || "")) {
+          toast.error(`${file.name}: unsupported format`);
+          continue;
+        }
+
+        setUploadProgress(prev => ({ ...prev, [file.name]: 10 }));
+
+        const filePath = `${selectedKb.id}/${crypto.randomUUID()}.${ext}`;
+        const { error: uploadErr } = await supabase.storage
+          .from("knowledge-files")
+          .upload(filePath, file);
+        
+        if (uploadErr) {
+          toast.error(`Failed to upload ${file.name}`);
+          setUploadProgress(prev => { const n = { ...prev }; delete n[file.name]; return n; });
+          continue;
+        }
+
+        setUploadProgress(prev => ({ ...prev, [file.name]: 50 }));
+
+        const { data, error } = await supabase.from("knowledge_sources").insert({
+          knowledge_base_id: selectedKb.id,
+          type: "file",
+          file_name: file.name,
+          file_path: filePath,
+          status: "pending",
+        } as any).select().single();
+
+        if (error) {
+          toast.error(`Failed to create source for ${file.name}`);
+          continue;
+        }
+
+        setUploadProgress(prev => ({ ...prev, [file.name]: 80 }));
+
+        // Trigger processing
+        if (data) {
+          processFileSource((data as any).id);
+        }
+        setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+      }
+
+      setUploadProgress({});
+      resetSourceForm();
+      setAddSourceOpen(false);
+      setAddingSource(false);
+      fetchSources(selectedKb.id);
+      return;
+    }
+
+    // Text source
     const insertData: any = {
       knowledge_base_id: selectedKb.id,
-      type: sourceType,
-      file_name: sourceType === "file" ? fileName : null,
-      content_text: sourceType === "text" ? sourceText.trim() : sourceType === "file" ? contentText : null,
+      type: "text",
+      content_text: sourceText.trim(),
       status: "pending",
     };
-
     const { data, error } = await supabase.from("knowledge_sources").insert(insertData).select().single();
     if (error) { toast.error("Failed to add source"); setAddingSource(false); return; }
-
     resetSourceForm();
     setAddSourceOpen(false);
     setAddingSource(false);
-
     if (data) processSource((data as any).id);
     fetchSources(selectedKb.id);
+  };
+
+  const processFileSource = async (sourceId: string) => {
+    try {
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-file-knowledge`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ sourceId }),
+        }
+      );
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error((err as any).error || "Processing failed");
+      }
+      toast.success("File processed successfully");
+    } catch (e: any) {
+      toast.error(e.message || "File processing failed");
+    }
+    if (selectedKbId) fetchSources(selectedKbId);
   };
 
   const handleDeleteSource = async (id: string) => {
@@ -405,9 +483,10 @@ const KnowledgeBasePage = () => {
   };
 
   const resetSourceForm = () => {
-    setSourceUrl(""); setSourceText(""); setSourceFile(null);
+    setSourceUrl(""); setSourceText(""); setSourceFiles([]);
     setUrlMode("single"); setAutoRefresh(false); setAutoCrawl(false);
     setExclusionList([]); setExclusionInput("");
+    setUploadProgress({});
   };
 
   const addExclusion = (list: string[], setList: (l: string[]) => void, input: string, setInput: (s: string) => void) => {
@@ -939,9 +1018,45 @@ const KnowledgeBasePage = () => {
             </TabsContent>
 
             <TabsContent value="file" className="space-y-3 pt-3">
-              <Label>Upload File</Label>
-              <Input type="file" accept=".pdf,.docx,.txt,.csv" onChange={(e) => setSourceFile(e.target.files?.[0] || null)} />
-              <p className="text-xs text-muted-foreground">Supported: PDF, DOCX, TXT, CSV (max 20MB).</p>
+              <Label>Upload Files</Label>
+              <Input
+                type="file"
+                accept=".pdf,.docx,.txt,.csv,.xlsx,.xls"
+                multiple
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || []);
+                  if (files.length > 25) {
+                    toast.error("Max 25 files at once");
+                    return;
+                  }
+                  const oversized = files.filter(f => f.size > 50 * 1024 * 1024);
+                  if (oversized.length) {
+                    toast.error(`${oversized[0].name} exceeds 50MB limit`);
+                    return;
+                  }
+                  setSourceFiles(files);
+                }}
+              />
+              {sourceFiles.length > 0 && (
+                <div className="space-y-1.5">
+                  {sourceFiles.map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm p-2 rounded-md bg-muted">
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="truncate flex-1">{f.name}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">{(f.size / 1024 / 1024).toFixed(1)}MB</span>
+                      {uploadProgress[f.name] !== undefined && (
+                        <Progress value={uploadProgress[f.name]} className="w-16 h-1.5" />
+                      )}
+                      <button onClick={() => setSourceFiles(sourceFiles.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-destructive">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Supported: PDF, DOCX, TXT, CSV, XLSX (max 50MB per file, 25 files per KB).
+              </p>
             </TabsContent>
 
             <TabsContent value="text" className="space-y-3 pt-3">

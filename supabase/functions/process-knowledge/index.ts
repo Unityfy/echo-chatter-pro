@@ -85,6 +85,24 @@ serve(async (req) => {
     } else if (source.type === "url") {
       content = await fetchUrlContent(source.source_url);
     } else if (source.type === "file") {
+      // If file has a storage path, redirect to process-file-knowledge
+      if (source.file_path) {
+        const baseUrl = Deno.env.get("SUPABASE_URL")!;
+        const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const resp = await fetch(`${baseUrl}/functions/v1/process-file-knowledge`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceKey}`,
+          },
+          body: JSON.stringify({ sourceId }),
+        });
+        const result = await resp.json();
+        return new Response(JSON.stringify(result), {
+          status: resp.ok ? 200 : 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       content = source.content_text || "";
     }
 
