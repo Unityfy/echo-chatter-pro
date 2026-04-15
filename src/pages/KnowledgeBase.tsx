@@ -191,17 +191,13 @@ const KnowledgeBasePage = () => {
   const getOrCreateTeamId = async (): Promise<string | null> => {
     if (teamId) return teamId;
     if (!user) return null;
-    // Auto-create a personal team for solo users
-    const { data: newTeam, error: teamError } = await supabase
-      .from("teams")
-      .insert({ name: "My Workspace", created_by: user.id } as any)
-      .select()
-      .single();
-    if (teamError || !newTeam) { toast.error("Failed to create workspace"); return null; }
-    await supabase
-      .from("team_members")
-      .insert({ team_id: (newTeam as any).id, user_id: user.id, role: "admin" as any });
-    return (newTeam as any).id;
+    // Auto-create a personal team for solo users using atomic DB function
+    const { data, error } = await supabase.rpc("create_team_with_admin", {
+      _name: "My Workspace",
+      _user_id: user.id,
+    });
+    if (error || !data) { toast.error("Failed to create workspace"); return null; }
+    return data as string;
   };
 
   const handleCreateKb = async () => {

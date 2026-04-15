@@ -407,6 +407,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_team_with_admin: {
+        Args: { _name: string; _user_id: string }
+        Returns: string
+      }
       is_team_admin: {
         Args: { _team_id: string; _user_id: string }
         Returns: boolean
