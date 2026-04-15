@@ -418,6 +418,7 @@ const KnowledgeBasePage = () => {
       knowledge_base_id: selectedKb.id,
       type: "text",
       content_text: sourceText.trim(),
+      file_name: sourceTextTitle.trim() || null,
       status: "pending",
     };
     const { data, error } = await supabase.from("knowledge_sources").insert(insertData).select().single();
