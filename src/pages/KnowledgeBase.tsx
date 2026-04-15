@@ -310,26 +310,26 @@ const KnowledgeBasePage = () => {
     if (!selectedKb) return;
     setAddingSource(true);
 
-    let contentText = "";
-    let fileName = "";
-
     if (sourceType === "url" && !sourceUrl.trim()) { toast.error("Enter a URL"); setAddingSource(false); return; }
     if (sourceType === "text" && !sourceText.trim()) { toast.error("Enter text content"); setAddingSource(false); return; }
     if (sourceType === "file") {
-      if (!sourceFile) { toast.error("Select a file"); setAddingSource(false); return; }
-      contentText = await sourceFile.text();
-      fileName = sourceFile.name;
+      if (sourceFiles.length === 0) { toast.error("Select files"); setAddingSource(false); return; }
+      // Check file count limit
+      const existingFiles = sources.filter(s => s.type === "file" && !s.parent_source_id).length;
+      if (existingFiles + sourceFiles.length > 25) {
+        toast.error(`Max 25 files per knowledge base (${existingFiles} existing)`);
+        setAddingSource(false);
+        return;
+      }
     }
 
     if (sourceType === "url") {
-      // URL-specific insert with crawl config
       const crawlConfig: CrawlConfig = {
         auto_refresh: autoRefresh,
         auto_crawl: urlMode === "crawl" ? true : autoCrawl,
         exclusion_list: exclusionList,
         max_urls: 500,
       };
-
       const insertData: any = {
         knowledge_base_id: selectedKb.id,
         type: "url",
@@ -337,37 +337,113 @@ const KnowledgeBasePage = () => {
         status: "pending",
         crawl_config: crawlConfig,
       };
-
       const { data, error } = await supabase.from("knowledge_sources").insert(insertData).select().single();
       if (error) { toast.error("Failed to add source"); setAddingSource(false); return; }
-
       resetSourceForm();
       setAddSourceOpen(false);
       setAddingSource(false);
-
       if (data) triggerCrawl((data as any).id, urlMode);
       fetchSources(selectedKb.id);
       return;
     }
 
-    // Non-URL sources
+    if (sourceType === "file") {
+      // Upload files to storage and create sources
+      for (const file of sourceFiles) {
+        if (file.size > 50 * 1024 * 1024) {
+          toast.error(`${file.name} exceeds 50MB limit`);
+          continue;
+        }
+        const ext = file.name.split(".").pop()?.toLowerCase();
+        if (!["pdf", "docx", "txt", "csv", "xlsx", "xls"].includes(ext || "")) {
+          toast.error(`${file.name}: unsupported format`);
+          continue;
+        }
+
+        setUploadProgress(prev => ({ ...prev, [file.name]: 10 }));
+
+        const filePath = `${selectedKb.id}/${crypto.randomUUID()}.${ext}`;
+        const { error: uploadErr } = await supabase.storage
+          .from("knowledge-files")
+          .upload(filePath, file);
+        
+        if (uploadErr) {
+          toast.error(`Failed to upload ${file.name}`);
+          setUploadProgress(prev => { const n = { ...prev }; delete n[file.name]; return n; });
+          continue;
+        }
+
+        setUploadProgress(prev => ({ ...prev, [file.name]: 50 }));
+
+        const { data, error } = await supabase.from("knowledge_sources").insert({
+          knowledge_base_id: selectedKb.id,
+          type: "file",
+          file_name: file.name,
+          file_path: filePath,
+          status: "pending",
+        } as any).select().single();
+
+        if (error) {
+          toast.error(`Failed to create source for ${file.name}`);
+          continue;
+        }
+
+        setUploadProgress(prev => ({ ...prev, [file.name]: 80 }));
+
+        // Trigger processing
+        if (data) {
+          processFileSource((data as any).id);
+        }
+        setUploadProgress(prev => ({ ...prev, [file.name]: 100 }));
+      }
+
+      setUploadProgress({});
+      resetSourceForm();
+      setAddSourceOpen(false);
+      setAddingSource(false);
+      fetchSources(selectedKb.id);
+      return;
+    }
+
+    // Text source
     const insertData: any = {
       knowledge_base_id: selectedKb.id,
-      type: sourceType,
-      file_name: sourceType === "file" ? fileName : null,
-      content_text: sourceType === "text" ? sourceText.trim() : sourceType === "file" ? contentText : null,
+      type: "text",
+      content_text: sourceText.trim(),
       status: "pending",
     };
-
     const { data, error } = await supabase.from("knowledge_sources").insert(insertData).select().single();
     if (error) { toast.error("Failed to add source"); setAddingSource(false); return; }
-
     resetSourceForm();
     setAddSourceOpen(false);
     setAddingSource(false);
-
     if (data) processSource((data as any).id);
     fetchSources(selectedKb.id);
+  };
+
+  const processFileSource = async (sourceId: string) => {
+    try {
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-file-knowledge`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ sourceId }),
+        }
+      );
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error((err as any).error || "Processing failed");
+      }
+      toast.success("File processed successfully");
+    } catch (e: any) {
+      toast.error(e.message || "File processing failed");
+    }
+    if (selectedKbId) fetchSources(selectedKbId);
   };
 
   const handleDeleteSource = async (id: string) => {
