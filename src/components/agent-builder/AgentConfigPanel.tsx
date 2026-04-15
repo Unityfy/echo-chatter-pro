@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import {
   Grid3X3, BookOpen, Volume2, AudioLines, Phone, BarChart3,
-  Shield, Webhook, Puzzle, Plus, Upload, Trash2,
+  Shield, Webhook, Puzzle, Plus, Upload, Trash2, X, Loader2,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,12 +18,15 @@ import {
 } from "@/components/ui/select";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 export type AgentConfigs = Record<string, Record<string, unknown>>;
 
 interface AgentConfigPanelProps {
   configs: AgentConfigs;
   onConfigsChange: (configs: AgentConfigs) => void;
+  agentId?: string;
 }
 
 interface ConfigSection {
@@ -71,21 +75,196 @@ function FunctionsSection({ config, onChange }: { config: Record<string, unknown
   );
 }
 
-function KnowledgeBaseSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
+// ─── Knowledge Base Section (Real Integration) ───────────────
+
+interface KBOption {
+  id: string;
+  name: string;
+  description: string | null;
+}
+
+function KnowledgeBaseSection({
+  config,
+  onChange,
+  agentId,
+}: {
+  config: Record<string, unknown>;
+  onChange: (c: Record<string, unknown>) => void;
+  agentId?: string;
+}) {
   const enabled = (config.enabled as boolean) ?? true;
+  const chunksToRetrieve = (config.chunksToRetrieve as number) ?? 3;
+  const similarityThreshold = (config.similarityThreshold as number) ?? 0.6;
+
+  const [allKbs, setAllKbs] = useState<KBOption[]>([]);
+  const [linkedKbIds, setLinkedKbIds] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [linking, setLinking] = useState(false);
+
+  // Load available KBs and linked KBs
+  useEffect(() => {
+    if (!agentId) return;
+    const load = async () => {
+      setLoading(true);
+      const [kbRes, linkRes] = await Promise.all([
+        supabase.from("knowledge_bases").select("id, name, description").order("name"),
+        supabase.from("agent_knowledge_bases").select("knowledge_base_id").eq("agent_id", agentId),
+      ]);
+      if (kbRes.data) setAllKbs(kbRes.data as KBOption[]);
+      if (linkRes.data) setLinkedKbIds(linkRes.data.map((r: any) => r.knowledge_base_id));
+      setLoading(false);
+    };
+    load();
+  }, [agentId]);
+
+  const linkedKbs = allKbs.filter((kb) => linkedKbIds.includes(kb.id));
+  const availableKbs = allKbs.filter((kb) => !linkedKbIds.includes(kb.id));
+
+  const linkKb = async (kbId: string) => {
+    if (!agentId) return;
+    setLinking(true);
+    const { error } = await supabase.from("agent_knowledge_bases").insert({
+      agent_id: agentId,
+      knowledge_base_id: kbId,
+    } as any);
+    if (error) {
+      toast.error("Failed to link knowledge base");
+    } else {
+      setLinkedKbIds((prev) => [...prev, kbId]);
+      toast.success("Knowledge base linked");
+    }
+    setLinking(false);
+  };
+
+  const unlinkKb = async (kbId: string) => {
+    if (!agentId) return;
+    const { error } = await supabase
+      .from("agent_knowledge_bases")
+      .delete()
+      .eq("agent_id", agentId)
+      .eq("knowledge_base_id", kbId);
+    if (error) {
+      toast.error("Failed to unlink knowledge base");
+    } else {
+      setLinkedKbIds((prev) => prev.filter((id) => id !== kbId));
+      toast.success("Knowledge base unlinked");
+    }
+  };
+
+  const update = (key: string, val: unknown) => onChange({ ...config, [key]: val });
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <Label className="text-xs">Enable Knowledge Base</Label>
-        <Switch checked={enabled} onCheckedChange={(v) => onChange({ ...config, enabled: v })} />
+        <Switch checked={enabled} onCheckedChange={(v) => update("enabled", v)} />
       </div>
-      <Button variant="outline" size="sm" className="w-full text-xs gap-1.5">
-        <Upload className="h-3.5 w-3.5" /> Upload Documents
-      </Button>
-      <p className="text-[11px] text-muted-foreground">No documents uploaded yet.</p>
+
+      {enabled && (
+        <>
+          {/* Linked KBs */}
+          <div className="space-y-2">
+            <Label className="text-xs text-muted-foreground">Linked Knowledge Bases</Label>
+            {loading ? (
+              <div className="flex items-center gap-2 py-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Loading...</span>
+              </div>
+            ) : linkedKbs.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground py-1">No knowledge bases linked yet.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {linkedKbs.map((kb) => (
+                  <div
+                    key={kb.id}
+                    className="flex items-center gap-2 p-2 rounded-md bg-muted/50 border border-border"
+                  >
+                    <BookOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-foreground truncate">{kb.name}</p>
+                      {kb.description && (
+                        <p className="text-[10px] text-muted-foreground truncate">{kb.description}</p>
+                      )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
+                      onClick={() => unlinkKb(kb.id)}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Add KB dropdown */}
+          {availableKbs.length > 0 && (
+            <Select onValueChange={linkKb} disabled={linking}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue placeholder="Link a knowledge base..." />
+              </SelectTrigger>
+              <SelectContent>
+                {availableKbs.map((kb) => (
+                  <SelectItem key={kb.id} value={kb.id} className="text-xs">
+                    {kb.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {/* Retrieval Settings */}
+          <div className="pt-2 border-t border-border space-y-4">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Retrieval Settings</p>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Chunks to Retrieve</Label>
+                <span className="text-[11px] text-muted-foreground font-mono">{chunksToRetrieve}</span>
+              </div>
+              <Slider
+                value={[chunksToRetrieve]}
+                onValueChange={([v]) => update("chunksToRetrieve", v)}
+                min={1}
+                max={10}
+                step={1}
+                className="w-full"
+              />
+              <p className="text-[10px] text-muted-foreground flex items-start gap-1">
+                <Info className="h-3 w-3 shrink-0 mt-0.5" />
+                Higher values provide more context but increase latency and cost.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs">Similarity Threshold</Label>
+                <span className="text-[11px] text-muted-foreground font-mono">{similarityThreshold.toFixed(2)}</span>
+              </div>
+              <Slider
+                value={[similarityThreshold]}
+                onValueChange={([v]) => update("similarityThreshold", parseFloat(v.toFixed(2)))}
+                min={0}
+                max={1}
+                step={0.05}
+                className="w-full"
+              />
+              <p className="text-[10px] text-muted-foreground flex items-start gap-1">
+                <Info className="h-3 w-3 shrink-0 mt-0.5" />
+                Higher values require stricter matches — fewer but more relevant results.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
+
+// ─── Other Sections (unchanged) ─────────────────────────────
 
 function SpeechSettingsSection({ config, onChange }: { config: Record<string, unknown>; onChange: (c: Record<string, unknown>) => void }) {
   const speed = (config.speed as number) ?? 1.0;
@@ -331,7 +510,7 @@ function MCPsSection() {
 
 // ─── Main Component ──────────────────────────────────────────
 
-export function AgentConfigPanel({ configs, onConfigsChange }: AgentConfigPanelProps) {
+export function AgentConfigPanel({ configs, onConfigsChange, agentId }: AgentConfigPanelProps) {
   const getConfig = (section: string) => configs[section] || {};
   const setConfig = (section: string) => (config: Record<string, unknown>) => {
     onConfigsChange({ ...configs, [section]: config });
@@ -339,7 +518,7 @@ export function AgentConfigPanel({ configs, onConfigsChange }: AgentConfigPanelP
 
   const sections: ConfigSection[] = [
     { id: "functions", label: "Functions", icon: Grid3X3, content: <FunctionsSection config={getConfig("functions")} onChange={setConfig("functions")} /> },
-    { id: "knowledge", label: "Knowledge Base", icon: BookOpen, content: <KnowledgeBaseSection config={getConfig("knowledge")} onChange={setConfig("knowledge")} /> },
+    { id: "knowledge", label: "Knowledge Base", icon: BookOpen, content: <KnowledgeBaseSection config={getConfig("knowledge")} onChange={setConfig("knowledge")} agentId={agentId} /> },
     { id: "speech", label: "Speech Settings", icon: Volume2, content: <SpeechSettingsSection config={getConfig("speech")} onChange={setConfig("speech")} /> },
     { id: "transcription", label: "Realtime Transcription Settings", icon: AudioLines, content: <TranscriptionSection config={getConfig("transcription")} onChange={setConfig("transcription")} /> },
     { id: "call", label: "Call Settings", icon: Phone, content: <CallSettingsSection config={getConfig("call")} onChange={setConfig("call")} /> },

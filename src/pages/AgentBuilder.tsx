@@ -200,7 +200,7 @@ const AgentBuilder = () => {
 
         {/* Center Panel - Config Sections */}
         <div className="flex-1 min-w-[280px] border-r border-border overflow-y-auto">
-          <AgentConfigPanel configs={configs} onConfigsChange={setConfigs} />
+          <AgentConfigPanel configs={configs} onConfigsChange={setConfigs} agentId={agentId} />
         </div>
 
         {/* Right Panel - Testing */}
