@@ -55,13 +55,19 @@ async function getEmbedding(text: string, apiKey: string): Promise<number[] | nu
 
 // ─── Vector search ───────────────────────────────────────────
 
+interface ChunkResult {
+  content: string;
+  metadata: any;
+  similarity: number;
+}
+
 async function searchChunks(
   supabase: any,
   embedding: number[],
   kbIds: string[],
   matchCount: number,
   threshold: number
-): Promise<{ content: string; metadata: any; similarity: number }[]> {
+): Promise<ChunkResult[]> {
   if (kbIds.length === 0) return [];
   const { data } = await supabase.rpc("search_knowledge_chunks", {
     _query_embedding: JSON.stringify(embedding),
@@ -139,9 +145,23 @@ async function getAgentIntents(supabase: any, agentId: string): Promise<IntentWi
   return intents.map((i: any) => ({ ...i, kb_ids: kbMap[i.id] || [] }));
 }
 
+// ─── Debug info type ─────────────────────────────────────────
+
+interface DebugInfo {
+  detected_intent: string | null;
+  intent_priority: string | null;
+  chunks: {
+    source: string;
+    origin: "agent" | "intent";
+    similarity: number;
+    preview: string;
+  }[];
+  settings: { chunksToRetrieve: number; similarityThreshold: number };
+}
+
 // ─── RAG context builder ────────────────────────────────────
 
-function formatChunks(chunks: { content: string; metadata: any }[], label: string): string {
+function formatChunks(chunks: ChunkResult[], label: string): string {
   if (chunks.length === 0) return "";
   const grouped: Record<string, string[]> = {};
   for (const c of chunks) {
@@ -162,28 +182,33 @@ async function getRAGContext(
   lovableApiKey: string,
   supabaseUrl: string,
   serviceRoleKey: string
-): Promise<string> {
+): Promise<{ context: string; debug: DebugInfo }> {
+  const emptyDebug: DebugInfo = {
+    detected_intent: null,
+    intent_priority: null,
+    chunks: [],
+    settings: { chunksToRetrieve: 3, similarityThreshold: 0.6 },
+  };
+
   try {
     const sb = createClient(supabaseUrl, serviceRoleKey);
 
-    // Parallel: agent KB IDs, retrieval settings, intents
     const [linksResult, settings, intents] = await Promise.all([
       sb.from("agent_knowledge_bases").select("knowledge_base_id").eq("agent_id", agentId),
       getRetrievalSettings(sb, agentId),
       getAgentIntents(sb, agentId),
     ]);
 
+    const debug: DebugInfo = { ...emptyDebug, settings };
+
     const agentKbIds = (linksResult.data || []).map((l: any) => l.knowledge_base_id);
     const hasIntents = intents.some((i) => i.kb_ids.length > 0);
 
-    // If no KBs at all, bail
-    if (agentKbIds.length === 0 && !hasIntents) return "";
+    if (agentKbIds.length === 0 && !hasIntents) return { context: "", debug };
 
-    // Generate embedding
     const embedding = await getEmbedding(transcriptQuery, lovableApiKey);
-    if (!embedding) return "";
+    if (!embedding) return { context: "", debug };
 
-    // Detect intent (parallel with agent KB search)
     const [agentChunks, detectedIntent] = await Promise.all([
       agentKbIds.length > 0
         ? searchChunks(sb, embedding, agentKbIds, settings.chunksToRetrieve, settings.similarityThreshold)
@@ -191,17 +216,36 @@ async function getRAGContext(
       hasIntents ? detectIntent(transcriptQuery, intents, lovableApiKey) : Promise.resolve(null),
     ]);
 
-    // Search intent-specific KBs if detected
-    let intentChunks: typeof agentChunks = [];
-    let priority = "equal";
+    debug.detected_intent = detectedIntent?.name || null;
+    debug.intent_priority = detectedIntent?.kb_priority || null;
+
+    // Build debug chunk info for agent chunks
+    for (const c of agentChunks) {
+      debug.chunks.push({
+        source: c.metadata?.source_name || c.metadata?.file_name || "Knowledge Base",
+        origin: "agent",
+        similarity: Math.round(c.similarity * 1000) / 1000,
+        preview: c.content.slice(0, 120),
+      });
+    }
+
+    let intentChunks: ChunkResult[] = [];
+    let priority = "intent_first"; // safe default
     if (detectedIntent && detectedIntent.kb_ids.length > 0) {
-      priority = detectedIntent.kb_priority;
+      priority = detectedIntent.kb_priority || "intent_first";
       intentChunks = await searchChunks(
         sb, embedding, detectedIntent.kb_ids, settings.chunksToRetrieve, settings.similarityThreshold
       );
+      for (const c of intentChunks) {
+        debug.chunks.push({
+          source: c.metadata?.source_name || c.metadata?.file_name || `Intent: ${detectedIntent.name}`,
+          origin: "intent",
+          similarity: Math.round(c.similarity * 1000) / 1000,
+          preview: c.content.slice(0, 120),
+        });
+      }
     }
 
-    // Merge based on priority
     let context = "## Related Knowledge Base Contexts\n\n";
 
     if (priority === "intent_first") {
@@ -211,18 +255,18 @@ async function getRAGContext(
       context += formatChunks(agentChunks, "Knowledge Base");
       context += formatChunks(intentChunks, `Intent: ${detectedIntent?.name}`);
     } else {
-      // Equal: interleave by similarity
       const all = [
-        ...agentChunks.map((c) => ({ ...c, _src: "agent" })),
-        ...intentChunks.map((c) => ({ ...c, _src: detectedIntent?.name || "intent" })),
+        ...agentChunks.map((c) => ({ ...c, _src: "agent" as const })),
+        ...intentChunks.map((c) => ({ ...c, _src: "intent" as const })),
       ].sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
       context += formatChunks(all, "Knowledge Base");
     }
 
-    return context.trim() === "## Related Knowledge Base Contexts" ? "" : context;
+    const hasContent = context.trim() !== "## Related Knowledge Base Contexts";
+    return { context: hasContent ? context : "", debug };
   } catch (e) {
     console.error("RAG retrieval error:", e);
-    return "";
+    return { context: "", debug: emptyDebug };
   }
 }
 
@@ -248,13 +292,16 @@ serve(async (req) => {
     }
 
     let ragContext = "";
+    let debugInfo: DebugInfo | null = null;
     if (agentId) {
       const transcriptQuery = buildTranscriptQuery(messages);
       if (transcriptQuery) {
-        ragContext = await getRAGContext(
+        const result = await getRAGContext(
           transcriptQuery, agentId, LOVABLE_API_KEY,
           Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
         );
+        ragContext = result.context;
+        debugInfo = result.debug;
       }
     }
 
@@ -298,8 +345,15 @@ serve(async (req) => {
       });
     }
 
+    // Encode debug info as a safe header value
+    const debugHeader = debugInfo ? encodeURIComponent(JSON.stringify(debugInfo)) : "";
+
     return new Response(response.body, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "text/event-stream",
+        ...(debugHeader ? { "X-RAG-Debug": debugHeader } : {}),
+      },
     });
   } catch (e) {
     console.error("agent-chat error:", e);
