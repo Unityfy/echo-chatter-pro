@@ -131,8 +131,9 @@ const KnowledgeBasePage = () => {
   const [sourceType, setSourceType] = useState<"url" | "text" | "file">("url");
   const [sourceUrl, setSourceUrl] = useState("");
   const [sourceText, setSourceText] = useState("");
-  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [addingSource, setAddingSource] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
 
   // URL crawl settings
   const [urlMode, setUrlMode] = useState<"single" | "crawl">("single");
