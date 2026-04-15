@@ -700,6 +700,7 @@ export function AgentConfigPanel({ configs, onConfigsChange, agentId }: AgentCon
   const sections: ConfigSection[] = [
     { id: "functions", label: "Functions", icon: Grid3X3, content: <FunctionsSection config={getConfig("functions")} onChange={setConfig("functions")} /> },
     { id: "knowledge", label: "Knowledge Base", icon: BookOpen, content: <KnowledgeBaseSection config={getConfig("knowledge")} onChange={setConfig("knowledge")} agentId={agentId} /> },
+    { id: "intents", label: "Intent-Based KB Routing", icon: Target, content: <IntentKnowledgeBaseSection agentId={agentId} /> },
     { id: "speech", label: "Speech Settings", icon: Volume2, content: <SpeechSettingsSection config={getConfig("speech")} onChange={setConfig("speech")} /> },
     { id: "transcription", label: "Realtime Transcription Settings", icon: AudioLines, content: <TranscriptionSection config={getConfig("transcription")} onChange={setConfig("transcription")} /> },
     { id: "call", label: "Call Settings", icon: Phone, content: <CallSettingsSection config={getConfig("call")} onChange={setConfig("call")} /> },
