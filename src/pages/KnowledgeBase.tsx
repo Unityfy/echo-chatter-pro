@@ -316,7 +316,10 @@ const KnowledgeBasePage = () => {
 
     if (sourceType === "url" && !sourceUrl.trim()) { toast.error("Enter a URL"); setAddingSource(false); return; }
     if (sourceType === "text" && !sourceText.trim()) { toast.error("Enter text content"); setAddingSource(false); return; }
-    if (sourceType === "file") {
+    if (sourceType === "text") {
+      const existingTexts = sources.filter(s => s.type === "text" && !s.parent_source_id).length;
+      if (existingTexts >= 50) { toast.error("Max 50 text snippets per knowledge base"); setAddingSource(false); return; }
+    }
       if (sourceFiles.length === 0) { toast.error("Select files"); setAddingSource(false); return; }
       // Check file count limit
       const existingFiles = sources.filter(s => s.type === "file" && !s.parent_source_id).length;
