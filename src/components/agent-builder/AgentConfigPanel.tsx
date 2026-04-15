@@ -2,8 +2,9 @@ import { useState, useEffect } from "react";
 import {
   Grid3X3, BookOpen, Volume2, AudioLines, Phone, BarChart3,
   Shield, Webhook, Puzzle, Plus, Upload, Trash2, X, Loader2,
-  Info,
+  Info, Target,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
