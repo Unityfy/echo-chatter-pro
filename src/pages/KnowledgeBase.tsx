@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import {
   BookOpen, Plus, Trash2, Globe, FileText, Type, Loader2,
   CheckCircle2, AlertCircle, RefreshCw, Pencil, Search,
-  MoreHorizontal, Clock, Database,
+  MoreHorizontal, Clock, Database, Settings2, Link2, X,
+  ChevronDown, ChevronRight, Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +21,10 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import {
+  Collapsible, CollapsibleContent, CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRBAC } from "@/hooks/useRBAC";
@@ -36,6 +41,13 @@ interface KnowledgeBase {
   team_id: string;
 }
 
+interface CrawlConfig {
+  auto_refresh?: boolean;
+  auto_crawl?: boolean;
+  exclusion_list?: string[];
+  max_urls?: number;
+}
+
 interface KnowledgeSource {
   id: string;
   knowledge_base_id: string;
@@ -48,6 +60,11 @@ interface KnowledgeSource {
   chunk_count: number;
   created_at: string;
   updated_at: string;
+  parent_source_id: string | null;
+  crawl_config: CrawlConfig | null;
+  crawl_status: string | null;
+  last_refreshed_at: string | null;
+  discovered_urls_count: number | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -59,7 +76,15 @@ const statusMap: Record<string, { label: string; variant: "default" | "secondary
   error: { label: "Failed", variant: "destructive", icon: AlertCircle },
 };
 
-function relativeTime(dateStr: string) {
+const crawlStatusMap: Record<string, { label: string; color: string }> = {
+  idle: { label: "Idle", color: "text-muted-foreground" },
+  crawling: { label: "Crawling", color: "text-primary" },
+  done: { label: "Crawled", color: "text-green-500" },
+  error: { label: "Crawl Failed", color: "text-destructive" },
+};
+
+function relativeTime(dateStr: string | null) {
+  if (!dateStr) return "never";
   const diff = Date.now() - new Date(dateStr).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "just now";
@@ -95,6 +120,7 @@ const KnowledgeBasePage = () => {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [addSourceOpen, setAddSourceOpen] = useState(false);
+  const [urlSettingsOpen, setUrlSettingsOpen] = useState(false);
 
   // KB form
   const [formName, setFormName] = useState("");
@@ -107,11 +133,26 @@ const KnowledgeBasePage = () => {
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [addingSource, setAddingSource] = useState(false);
 
-  // Search
-  const [search, setSearch] = useState("");
+  // URL crawl settings
+  const [urlMode, setUrlMode] = useState<"single" | "crawl">("single");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoCrawl, setAutoCrawl] = useState(false);
+  const [exclusionInput, setExclusionInput] = useState("");
+  const [exclusionList, setExclusionList] = useState<string[]>([]);
 
-  // Tab filter inside KB detail
+  // URL settings dialog state (for editing existing source)
+  const [editingSource, setEditingSource] = useState<KnowledgeSource | null>(null);
+  const [editAutoRefresh, setEditAutoRefresh] = useState(false);
+  const [editAutoCrawl, setEditAutoCrawl] = useState(false);
+  const [editExclusions, setEditExclusions] = useState<string[]>([]);
+  const [editExclusionInput, setEditExclusionInput] = useState("");
+
+  // Search & tabs
+  const [search, setSearch] = useState("");
   const [sourceTab, setSourceTab] = useState<"all" | "url" | "file" | "text">("all");
+
+  // Expanded URL parents (to show children)
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
 
   const selectedKb = knowledgeBases.find((kb) => kb.id === selectedKbId) || null;
 
@@ -194,6 +235,36 @@ const KnowledgeBasePage = () => {
 
   // ─── Source CRUD ───────────────────────────────────────────────────
 
+  const triggerCrawl = async (sourceId: string, mode: "single" | "crawl") => {
+    try {
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/crawl-knowledge`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ sourceId, mode }),
+        }
+      );
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error((err as any).error || "Processing failed");
+      }
+      const result = await resp.json();
+      if (mode === "crawl") {
+        toast.success(`Crawled ${result.crawledUrls || 0} pages, ${result.totalChunks || 0} chunks created`);
+      } else {
+        toast.success(`Processed: ${result.chunks || result.totalChunks || 0} chunks created`);
+      }
+    } catch (e: any) {
+      toast.error(e.message || "Processing failed");
+    }
+    if (selectedKbId) fetchSources(selectedKbId);
+  };
+
   const processSource = async (sourceId: string) => {
     try {
       const resp = await fetch(
@@ -234,10 +305,39 @@ const KnowledgeBasePage = () => {
       fileName = sourceFile.name;
     }
 
+    if (sourceType === "url") {
+      // URL-specific insert with crawl config
+      const crawlConfig: CrawlConfig = {
+        auto_refresh: autoRefresh,
+        auto_crawl: urlMode === "crawl" ? true : autoCrawl,
+        exclusion_list: exclusionList,
+        max_urls: 500,
+      };
+
+      const insertData: any = {
+        knowledge_base_id: selectedKb.id,
+        type: "url",
+        source_url: sourceUrl.trim(),
+        status: "pending",
+        crawl_config: crawlConfig,
+      };
+
+      const { data, error } = await supabase.from("knowledge_sources").insert(insertData).select().single();
+      if (error) { toast.error("Failed to add source"); setAddingSource(false); return; }
+
+      resetSourceForm();
+      setAddSourceOpen(false);
+      setAddingSource(false);
+
+      if (data) triggerCrawl((data as any).id, urlMode);
+      fetchSources(selectedKb.id);
+      return;
+    }
+
+    // Non-URL sources
     const insertData: any = {
       knowledge_base_id: selectedKb.id,
       type: sourceType,
-      source_url: sourceType === "url" ? sourceUrl.trim() : null,
       file_name: sourceType === "file" ? fileName : null,
       content_text: sourceType === "text" ? sourceText.trim() : sourceType === "file" ? contentText : null,
       status: "pending",
@@ -246,7 +346,7 @@ const KnowledgeBasePage = () => {
     const { data, error } = await supabase.from("knowledge_sources").insert(insertData).select().single();
     if (error) { toast.error("Failed to add source"); setAddingSource(false); return; }
 
-    setSourceUrl(""); setSourceText(""); setSourceFile(null);
+    resetSourceForm();
     setAddSourceOpen(false);
     setAddingSource(false);
 
@@ -261,6 +361,49 @@ const KnowledgeBasePage = () => {
     if (selectedKbId) fetchSources(selectedKbId);
   };
 
+  const handleUpdateUrlSettings = async () => {
+    if (!editingSource) return;
+    const config: CrawlConfig = {
+      auto_refresh: editAutoRefresh,
+      auto_crawl: editAutoCrawl,
+      exclusion_list: editExclusions,
+      max_urls: 500,
+    };
+    const { error } = await supabase
+      .from("knowledge_sources")
+      .update({ crawl_config: config } as any)
+      .eq("id", editingSource.id);
+    if (error) { toast.error("Failed to update settings"); return; }
+    toast.success("URL settings updated");
+    setUrlSettingsOpen(false);
+    setEditingSource(null);
+    if (selectedKbId) fetchSources(selectedKbId);
+  };
+
+  const openUrlSettings = (src: KnowledgeSource) => {
+    setEditingSource(src);
+    const cfg = src.crawl_config || {};
+    setEditAutoRefresh(cfg.auto_refresh || false);
+    setEditAutoCrawl(cfg.auto_crawl || false);
+    setEditExclusions(cfg.exclusion_list || []);
+    setEditExclusionInput("");
+    setUrlSettingsOpen(true);
+  };
+
+  const resetSourceForm = () => {
+    setSourceUrl(""); setSourceText(""); setSourceFile(null);
+    setUrlMode("single"); setAutoRefresh(false); setAutoCrawl(false);
+    setExclusionList([]); setExclusionInput("");
+  };
+
+  const addExclusion = (list: string[], setList: (l: string[]) => void, input: string, setInput: (s: string) => void) => {
+    const val = input.trim();
+    if (!val || list.includes(val)) return;
+    if (list.length >= 200) { toast.error("Max 200 exclusion URLs"); return; }
+    setList([...list, val]);
+    setInput("");
+  };
+
   // ─── Derived data ─────────────────────────────────────────────────
 
   const filteredKbs = useMemo(() =>
@@ -268,16 +411,161 @@ const KnowledgeBasePage = () => {
       !search || kb.name.toLowerCase().includes(search.toLowerCase()) || kb.description?.toLowerCase().includes(search.toLowerCase())
     ), [knowledgeBases, search]);
 
+  // Separate parent (root) and child sources
+  const parentSources = useMemo(() =>
+    sources.filter((s) => !s.parent_source_id), [sources]);
+
+  const childSourcesByParent = useMemo(() => {
+    const map: Record<string, KnowledgeSource[]> = {};
+    sources.filter((s) => s.parent_source_id).forEach((s) => {
+      if (!map[s.parent_source_id!]) map[s.parent_source_id!] = [];
+      map[s.parent_source_id!].push(s);
+    });
+    return map;
+  }, [sources]);
+
   const filteredSources = useMemo(() =>
-    sources.filter((s) => sourceTab === "all" || s.type === sourceTab),
-    [sources, sourceTab]);
+    parentSources.filter((s) => sourceTab === "all" || s.type === sourceTab),
+    [parentSources, sourceTab]);
 
   const sourceCounts = useMemo(() => ({
-    all: sources.length,
-    url: sources.filter((s) => s.type === "url").length,
-    file: sources.filter((s) => s.type === "file").length,
-    text: sources.filter((s) => s.type === "text").length,
-  }), [sources]);
+    all: parentSources.length,
+    url: parentSources.filter((s) => s.type === "url").length,
+    file: parentSources.filter((s) => s.type === "file").length,
+    text: parentSources.filter((s) => s.type === "text").length,
+  }), [parentSources]);
+
+  const toggleExpanded = (id: string) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  // ─── Source Row Renderer ───────────────────────────────────────────
+
+  const renderSourceRow = (src: KnowledgeSource, isChild = false) => {
+    const st = statusMap[src.status] || statusMap.pending;
+    const StatusIcon = st.icon;
+    const isSpinning = src.status === "processing" || src.status === "pending";
+    const hasChildren = !isChild && (childSourcesByParent[src.id]?.length || 0) > 0;
+    const isExpanded = expandedParents.has(src.id);
+    const crawlSt = src.crawl_status && crawlStatusMap[src.crawl_status];
+    const isUrlParent = src.type === "url" && !src.parent_source_id;
+    const cfg = src.crawl_config || {};
+
+    return (
+      <div key={src.id}>
+        <div
+          className={`flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted/30 transition-colors group ${isChild ? "ml-8 border-l-2 border-l-primary/20" : ""}`}
+        >
+          {/* Expand toggle for parents with children */}
+          {hasChildren ? (
+            <button
+              onClick={() => toggleExpanded(src.id)}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+            >
+              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+          ) : (
+            <div className="w-4 shrink-0" />
+          )}
+
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+            {src.type === "url" && <Globe className="h-4 w-4 text-muted-foreground" />}
+            {src.type === "file" && <FileText className="h-4 w-4 text-muted-foreground" />}
+            {src.type === "text" && <Type className="h-4 w-4 text-muted-foreground" />}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-foreground truncate">
+              {sourceLabel(src)}
+            </p>
+            <div className="flex items-center gap-2 mt-1 flex-wrap">
+              <Badge variant={st.variant} className="text-[10px] px-1.5 py-0 gap-1">
+                <StatusIcon className={`h-2.5 w-2.5 ${isSpinning ? "animate-spin" : ""}`} />
+                {st.label}
+              </Badge>
+
+              {crawlSt && src.crawl_status !== "idle" && (
+                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${crawlSt.color}`}>
+                  {crawlSt.label}
+                </Badge>
+              )}
+
+              {src.chunk_count > 0 && (
+                <span className="text-[11px] text-muted-foreground">
+                  {src.chunk_count} chunks
+                </span>
+              )}
+
+              {(src.discovered_urls_count || 0) > 0 && (
+                <span className="text-[11px] text-muted-foreground">
+                  {src.discovered_urls_count} pages
+                </span>
+              )}
+
+              {isUrlParent && cfg.auto_refresh && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 text-primary">
+                  <RefreshCw className="h-2 w-2" /> Auto
+                </Badge>
+              )}
+
+              {isUrlParent && cfg.auto_crawl && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 gap-1 text-primary">
+                  <Link2 className="h-2 w-2" /> Crawl
+                </Badge>
+              )}
+
+              <span className="text-[11px] text-muted-foreground/70">
+                {src.last_refreshed_at ? `Refreshed ${relativeTime(src.last_refreshed_at)}` : relativeTime(src.updated_at || src.created_at)}
+              </span>
+            </div>
+            {src.error_message && (
+              <p className="text-xs text-destructive mt-1 truncate">{src.error_message}</p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {isUrlParent && canManage && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="URL Settings" onClick={() => openUrlSettings(src)}>
+                <Settings2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {src.type === "url" && canManage && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                title="Re-crawl"
+                onClick={() => triggerCrawl(src.id, cfg.auto_crawl ? "crawl" : "single")}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {src.type !== "url" && (src.status === "error" || src.status === "pending") && canManage && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="Reprocess" onClick={() => processSource(src.id)}>
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {canManage && (
+              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteSource(src.id)}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Child URLs */}
+        {hasChildren && isExpanded && (
+          <div className="space-y-1 mt-1">
+            {childSourcesByParent[src.id].map((child) => renderSourceRow(child, true))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ─── Render ────────────────────────────────────────────────────────
 
@@ -321,9 +609,7 @@ const KnowledgeBasePage = () => {
                   {knowledgeBases.length === 0 ? "No knowledge bases yet" : "No results found"}
                 </p>
                 <p className="text-helper mt-1">
-                  {knowledgeBases.length === 0
-                    ? "Create your first knowledge base to get started."
-                    : "Try a different search term."}
+                  {knowledgeBases.length === 0 ? "Create your first knowledge base to get started." : "Try a different search term."}
                 </p>
                 {canManage && knowledgeBases.length === 0 && (
                   <Button className="mt-4 gap-1.5" onClick={() => { resetForm(); setCreateOpen(true); }}>
@@ -366,14 +652,11 @@ const KnowledgeBasePage = () => {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setSelectedKbId(kb.id); openEditDialog(); }}>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setSelectedKbId(kb.id); setTimeout(openEditDialog, 50); }}>
                                 <Pencil className="h-3.5 w-3.5 mr-2" /> Edit
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                className="text-destructive focus:text-destructive"
-                                onClick={(e) => { e.stopPropagation(); handleDeleteKb(kb.id); }}
-                              >
+                              <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteKb(kb.id); }}>
                                 <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete
                               </DropdownMenuItem>
                             </DropdownMenuContent>
@@ -422,7 +705,6 @@ const KnowledgeBasePage = () => {
                   )}
                 </div>
 
-                {/* Source type tabs */}
                 <Tabs value={sourceTab} onValueChange={(v) => setSourceTab(v as any)} className="mt-4">
                   <TabsList>
                     <TabsTrigger value="all" className="text-xs gap-1.5">
@@ -452,78 +734,21 @@ const KnowledgeBasePage = () => {
                   <div className="py-12 text-center">
                     <Database className="h-8 w-8 mx-auto text-muted-foreground mb-3" />
                     <p className="text-sm font-medium text-foreground">
-                      {sources.length === 0 ? "No sources yet" : "No sources in this category"}
+                      {parentSources.length === 0 ? "No sources yet" : "No sources in this category"}
                     </p>
                     <p className="text-helper mt-1">
-                      {sources.length === 0
+                      {parentSources.length === 0
                         ? "Add URLs, upload files, or paste text to build your knowledge base."
                         : "Switch tabs or add a new source."}
                     </p>
-                    {canManage && sources.length === 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="mt-4 gap-1.5"
-                        onClick={() => { setSourceType("url"); setAddSourceOpen(true); }}
-                      >
+                    {canManage && parentSources.length === 0 && (
+                      <Button variant="outline" size="sm" className="mt-4 gap-1.5" onClick={() => { setSourceType("url"); setAddSourceOpen(true); }}>
                         <Plus className="h-3.5 w-3.5" /> Add First Source
                       </Button>
                     )}
                   </div>
                 ) : (
-                  filteredSources.map((src) => {
-                    const st = statusMap[src.status] || statusMap.pending;
-                    const StatusIcon = st.icon;
-                    const isSpinning = src.status === "processing" || src.status === "pending";
-                    return (
-                      <div
-                        key={src.id}
-                        className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted/30 transition-colors group"
-                      >
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-                          {src.type === "url" && <Globe className="h-4 w-4 text-muted-foreground" />}
-                          {src.type === "file" && <FileText className="h-4 w-4 text-muted-foreground" />}
-                          {src.type === "text" && <Type className="h-4 w-4 text-muted-foreground" />}
-                        </div>
-
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate">
-                            {sourceLabel(src)}
-                          </p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <Badge variant={st.variant} className="text-[10px] px-1.5 py-0 gap-1">
-                              <StatusIcon className={`h-2.5 w-2.5 ${isSpinning ? "animate-spin" : ""}`} />
-                              {st.label}
-                            </Badge>
-                            {src.chunk_count > 0 && (
-                              <span className="text-[11px] text-muted-foreground">
-                                {src.chunk_count} chunks
-                              </span>
-                            )}
-                            <span className="text-[11px] text-muted-foreground/70">
-                              {relativeTime(src.updated_at || src.created_at)}
-                            </span>
-                          </div>
-                          {src.error_message && (
-                            <p className="text-xs text-destructive mt-1 truncate">{src.error_message}</p>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {(src.status === "error" || src.status === "pending") && canManage && (
-                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Reprocess" onClick={() => processSource(src.id)}>
-                              <RefreshCw className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                          {canManage && (
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteSource(src.id)}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
+                  filteredSources.map((src) => renderSourceRow(src))
                 )}
               </CardContent>
             </Card>
@@ -590,8 +815,8 @@ const KnowledgeBasePage = () => {
       </Dialog>
 
       {/* ── Add Source Dialog ─────────────────────────────────────── */}
-      <Dialog open={addSourceOpen} onOpenChange={setAddSourceOpen}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog open={addSourceOpen} onOpenChange={(open) => { setAddSourceOpen(open); if (!open) resetSourceForm(); }}>
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Add Source</DialogTitle>
             <DialogDescription>
@@ -604,31 +829,192 @@ const KnowledgeBasePage = () => {
               <TabsTrigger value="file" className="flex-1 gap-1.5"><FileText className="h-3.5 w-3.5" /> File</TabsTrigger>
               <TabsTrigger value="text" className="flex-1 gap-1.5"><Type className="h-3.5 w-3.5" /> Text</TabsTrigger>
             </TabsList>
-            <TabsContent value="url" className="space-y-3 pt-3">
-              <Label>Website URL</Label>
-              <Input placeholder="https://example.com/docs" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
-              <p className="text-xs text-muted-foreground">The page content will be extracted and indexed.</p>
+
+            <TabsContent value="url" className="space-y-4 pt-3">
+              {/* URL Mode */}
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={urlMode === "single" ? "default" : "outline"}
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setUrlMode("single")}
+                >
+                  <Globe className="h-3.5 w-3.5" /> Single URL
+                </Button>
+                <Button
+                  type="button"
+                  variant={urlMode === "crawl" ? "default" : "outline"}
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setUrlMode("crawl")}
+                >
+                  <Link2 className="h-3.5 w-3.5" /> Crawl Path
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                <Label>{urlMode === "crawl" ? "Base URL Path" : "Website URL"}</Label>
+                <Input
+                  placeholder={urlMode === "crawl" ? "https://example.com/docs" : "https://example.com/page"}
+                  value={sourceUrl}
+                  onChange={(e) => setSourceUrl(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {urlMode === "crawl"
+                    ? "All pages under this path will be auto-discovered and indexed (max 500 URLs)."
+                    : "The page content will be extracted and indexed."}
+                </p>
+              </div>
+
+              {/* URL Settings */}
+              <Collapsible>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground w-full justify-start">
+                    <Settings2 className="h-3.5 w-3.5" /> Advanced Settings
+                    <ChevronDown className="h-3.5 w-3.5 ml-auto" />
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="space-y-4 pt-3 px-1">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-sm">Auto-refresh (24h)</Label>
+                      <p className="text-xs text-muted-foreground">Re-index content every 24 hours.</p>
+                    </div>
+                    <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
+                  </div>
+
+                  {urlMode === "single" && (
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label className="text-sm">Auto-crawl sub-pages</Label>
+                        <p className="text-xs text-muted-foreground">Discover and index linked pages.</p>
+                      </div>
+                      <Switch checked={autoCrawl} onCheckedChange={setAutoCrawl} />
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label className="text-sm">Exclusion URLs</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="/privacy, /terms, /login"
+                        value={exclusionInput}
+                        onChange={(e) => setExclusionInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addExclusion(exclusionList, setExclusionList, exclusionInput, setExclusionInput); } }}
+                        className="text-sm"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={() => addExclusion(exclusionList, setExclusionList, exclusionInput, setExclusionInput)}>Add</Button>
+                    </div>
+                    {exclusionList.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {exclusionList.map((ex, i) => (
+                          <Badge key={i} variant="secondary" className="text-xs gap-1 pr-1">
+                            {ex}
+                            <button onClick={() => setExclusionList(exclusionList.filter((_, j) => j !== i))} className="hover:text-destructive">
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <p className="text-xs text-muted-foreground">URLs containing these paths will be skipped (max 200).</p>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
             </TabsContent>
+
             <TabsContent value="file" className="space-y-3 pt-3">
               <Label>Upload File</Label>
-              <Input
-                type="file"
-                accept=".pdf,.docx,.txt,.csv"
-                onChange={(e) => setSourceFile(e.target.files?.[0] || null)}
-              />
+              <Input type="file" accept=".pdf,.docx,.txt,.csv" onChange={(e) => setSourceFile(e.target.files?.[0] || null)} />
               <p className="text-xs text-muted-foreground">Supported: PDF, DOCX, TXT, CSV (max 20MB).</p>
             </TabsContent>
+
             <TabsContent value="text" className="space-y-3 pt-3">
               <Label>Text Content</Label>
               <Textarea placeholder="Paste your content here..." rows={6} value={sourceText} onChange={(e) => setSourceText(e.target.value)} />
               <p className="text-xs text-muted-foreground">Raw text will be chunked and indexed.</p>
             </TabsContent>
           </Tabs>
+
           <DialogFooter className="pt-2">
             <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
             <Button onClick={handleAddSource} disabled={addingSource}>
-              {addingSource ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Processing...</> : "Add & Process"}
+              {addingSource ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Processing...</>
+              ) : sourceType === "url" && urlMode === "crawl" ? (
+                <><Zap className="h-4 w-4 mr-2" /> Crawl & Index</>
+              ) : (
+                "Add & Process"
+              )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── URL Settings Dialog ───────────────────────────────────── */}
+      <Dialog open={urlSettingsOpen} onOpenChange={setUrlSettingsOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>URL Settings</DialogTitle>
+            <DialogDescription className="truncate">
+              {editingSource?.source_url}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm">Auto-refresh (24h)</Label>
+                <p className="text-xs text-muted-foreground">Re-index content every 24 hours.</p>
+              </div>
+              <Switch checked={editAutoRefresh} onCheckedChange={setEditAutoRefresh} />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm">Auto-crawl sub-pages</Label>
+                <p className="text-xs text-muted-foreground">Discover and index linked pages under this path.</p>
+              </div>
+              <Switch checked={editAutoCrawl} onCheckedChange={setEditAutoCrawl} />
+            </div>
+
+            <Separator />
+
+            <div className="space-y-2">
+              <Label className="text-sm">Exclusion URLs</Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="/privacy, /terms"
+                  value={editExclusionInput}
+                  onChange={(e) => setEditExclusionInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addExclusion(editExclusions, setEditExclusions, editExclusionInput, setEditExclusionInput); } }}
+                  className="text-sm"
+                />
+                <Button type="button" variant="outline" size="sm" onClick={() => addExclusion(editExclusions, setEditExclusions, editExclusionInput, setEditExclusionInput)}>Add</Button>
+              </div>
+              {editExclusions.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {editExclusions.map((ex, i) => (
+                    <Badge key={i} variant="secondary" className="text-xs gap-1 pr-1">
+                      {ex}
+                      <button onClick={() => setEditExclusions(editExclusions.filter((_, j) => j !== i))} className="hover:text-destructive">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {editingSource?.last_refreshed_at && (
+              <p className="text-xs text-muted-foreground">
+                Last refreshed: {relativeTime(editingSource.last_refreshed_at)}
+              </p>
+            )}
+          </div>
+          <DialogFooter className="pt-2">
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <Button onClick={handleUpdateUrlSettings}>Save Settings</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
