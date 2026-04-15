@@ -14,13 +14,6 @@ export const VOICE_MAP: Record<string, string> = {
 
 type Msg = { role: "user" | "assistant"; content: string };
 
-export interface DebugChunk {
-  content: string;
-  similarity: number;
-  source: string;
-  sourceType: string;
-}
-
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-chat`;
 const TTS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-tts`;
 const STT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-stt`;
@@ -37,26 +30,20 @@ const headers = () => ({
 export async function streamAgentChat({
   messages,
   systemPrompt,
-  agentId,
-  debug,
   onDelta,
   onDone,
-  onDebugChunks,
   signal,
 }: {
   messages: Msg[];
   systemPrompt: string;
-  agentId?: string;
-  debug?: boolean;
   onDelta: (text: string) => void;
   onDone: () => void;
-  onDebugChunks?: (chunks: DebugChunk[]) => void;
   signal?: AbortSignal;
 }) {
   const resp = await fetch(CHAT_URL, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ messages, systemPrompt, agentId, debug }),
+    body: JSON.stringify({ messages, systemPrompt }),
     signal,
   });
 
@@ -94,11 +81,6 @@ export async function streamAgentChat({
 
       try {
         const parsed = JSON.parse(jsonStr);
-        // Check if this is a debug event
-        if (parsed.debugChunks && onDebugChunks) {
-          onDebugChunks(parsed.debugChunks);
-          continue;
-        }
         const content = parsed.choices?.[0]?.delta?.content as string | undefined;
         if (content) onDelta(content);
       } catch {
@@ -118,10 +100,6 @@ export async function streamAgentChat({
       if (jsonStr === "[DONE]") continue;
       try {
         const parsed = JSON.parse(jsonStr);
-        if (parsed.debugChunks && onDebugChunks) {
-          onDebugChunks(parsed.debugChunks);
-          continue;
-        }
         const content = parsed.choices?.[0]?.delta?.content as string | undefined;
         if (content) onDelta(content);
       } catch { /* ignore */ }

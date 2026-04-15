@@ -205,7 +205,7 @@ const AgentBuilder = () => {
 
         {/* Right Panel - Testing */}
         <div className="w-[280px] min-w-[240px] flex flex-col overflow-y-auto">
-          <AgentTestPanel systemPrompt={prompt} voiceName={voice} agentId={agentId} />
+          <AgentTestPanel systemPrompt={prompt} voiceName={voice} />
         </div>
       </div>
     </div>

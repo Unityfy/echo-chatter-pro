@@ -1,24 +1,20 @@
 import { useState, useRef, useCallback } from "react";
-import { Mic, MicOff, Play, Square, Volume2, Cpu, Loader2, Bug } from "lucide-react";
+import { Mic, MicOff, Play, Square, Volume2, Cpu, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { streamAgentChat, generateSpeech, transcribeAudio, type DebugChunk } from "@/services/agentService";
-import { KnowledgeDebugPanel } from "./KnowledgeDebugPanel";
+import { streamAgentChat, generateSpeech, transcribeAudio } from "@/services/agentService";
 import { toast } from "sonner";
 
 interface AgentTestPanelProps {
   systemPrompt?: string;
   voiceName?: string;
-  agentId?: string;
 }
 
 type Message = { role: "user" | "assistant"; content: string };
 
-export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPanelProps) {
+export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps) {
   const [testMode, setTestMode] = useState<"audio" | "llm">("llm");
   const [isRunning, setIsRunning] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -27,9 +23,6 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
   const [textInput, setTextInput] = useState("");
   const [latency, setLatency] = useState<number | null>(null);
   const [recordingStartTime, setRecordingStartTime] = useState<number>(0);
-  const [debugMode, setDebugMode] = useState(false);
-  const [debugChunks, setDebugChunks] = useState<DebugChunk[]>([]);
-  const [showDebugPanel, setShowDebugPanel] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -42,7 +35,6 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
   const sendToLLM = useCallback(async (userText: string, allMessages: Message[]) => {
     const startTime = Date.now();
     setIsRunning(true);
-    setDebugChunks([]);
 
     const userMsg: Message = { role: "user", content: userText };
     const updatedMessages = [...allMessages, userMsg];
@@ -56,8 +48,6 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
       await streamAgentChat({
         messages: updatedMessages,
         systemPrompt: systemPrompt || "You are a helpful AI voice agent. Keep responses concise and conversational.",
-        agentId,
-        debug: debugMode,
         onDelta: (chunk) => {
           if (!latency) setLatency(Date.now() - startTime);
           assistantContent += chunk;
@@ -74,13 +64,10 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
           setLatency(Date.now() - startTime);
           setIsRunning(false);
         },
-        onDebugChunks: (chunks) => {
-          setDebugChunks(chunks);
-          if (debugMode) setShowDebugPanel(true);
-        },
         signal: controller.signal,
       });
 
+      // If audio mode, speak the response
       if (testMode === "audio" && assistantContent) {
         setIsSpeaking(true);
         try {
@@ -99,7 +86,7 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
       }
       setIsRunning(false);
     }
-  }, [systemPrompt, testMode, voiceName, latency, agentId, debugMode]);
+  }, [systemPrompt, testMode, voiceName, latency]);
 
   const handleTextSubmit = () => {
     if (!textInput.trim() || isRunning) return;
@@ -129,6 +116,7 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
         }
 
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+
         setIsRunning(true);
         try {
           const text = await transcribeAudio(blob);
@@ -170,52 +158,23 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
     handleStop();
     setMessages([]);
     setLatency(null);
-    setDebugChunks([]);
-    setShowDebugPanel(false);
   };
 
   return (
     <div className="flex flex-col h-full">
-      {/* Test Mode Tabs + Debug Toggle */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+      {/* Test Mode Tabs */}
+      <div className="flex items-center justify-center px-4 py-3 border-b border-border">
         <Tabs value={testMode} onValueChange={(v) => setTestMode(v as "audio" | "llm")}>
           <TabsList className="h-8">
             <TabsTrigger value="audio" className="text-xs px-3 h-7 gap-1.5">
-              <Volume2 className="h-3 w-3" /> Audio
+              <Volume2 className="h-3 w-3" /> Test Audio
             </TabsTrigger>
             <TabsTrigger value="llm" className="text-xs px-3 h-7 gap-1.5">
-              <Cpu className="h-3 w-3" /> LLM
+              <Cpu className="h-3 w-3" /> Test LLM
             </TabsTrigger>
           </TabsList>
         </Tabs>
-        <div className="flex items-center gap-1.5">
-          <Switch
-            id="debug-mode"
-            checked={debugMode}
-            onCheckedChange={setDebugMode}
-            className="scale-75"
-          />
-          <Label htmlFor="debug-mode" className="text-[10px] text-muted-foreground cursor-pointer flex items-center gap-1">
-            <Bug className="h-3 w-3" /> Debug
-          </Label>
-        </div>
       </div>
-
-      {/* Debug Panel (collapsible) */}
-      {debugMode && showDebugPanel && debugChunks.length > 0 && (
-        <div className="border-b border-border bg-muted/20">
-          <button
-            onClick={() => setShowDebugPanel(!showDebugPanel)}
-            className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-          >
-            <span className="flex items-center gap-1.5">
-              <Bug className="h-3 w-3" /> Knowledge Debug
-              <Badge variant="outline" className="text-[9px] px-1 py-0">{debugChunks.length}</Badge>
-            </span>
-          </button>
-          <KnowledgeDebugPanel chunks={debugChunks} />
-        </div>
-      )}
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
