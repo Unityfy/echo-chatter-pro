@@ -6,7 +6,6 @@ import {
   BarChart3,
   Plug,
   Settings,
-  BookOpen,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
@@ -40,7 +39,6 @@ const mainItems: NavItem[] = [
   { title: "Workflows", url: "/workflows", icon: Workflow, requiredPermission: "workflows.view" },
   { title: "Analytics", url: "/analytics", icon: BarChart3, requiredPermission: "analytics.view" },
   { title: "Integrations", url: "/integrations", icon: Plug, requiredPermission: "integrations.view" },
-  { title: "Knowledge Base", url: "/knowledge-base", icon: BookOpen },
 ];
 
 const bottomItems: NavItem[] = [
