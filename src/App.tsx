@@ -20,6 +20,7 @@ import Workflows from "./pages/Workflows.tsx";
 import Analytics from "./pages/Analytics.tsx";
 import Integrations from "./pages/Integrations.tsx";
 import SettingsPage from "./pages/SettingsPage.tsx";
+import KnowledgeBase from "./pages/KnowledgeBase.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
@@ -46,6 +47,7 @@ const App = () => (
                 <Route path="/workflows" element={<Workflows />} />
                 <Route path="/analytics" element={<Analytics />} />
                 <Route path="/integrations" element={<Integrations />} />
+                <Route path="/knowledge" element={<KnowledgeBase />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
               <Route path="*" element={<NotFound />} />
