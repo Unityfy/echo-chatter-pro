@@ -483,9 +483,10 @@ const KnowledgeBasePage = () => {
   };
 
   const resetSourceForm = () => {
-    setSourceUrl(""); setSourceText(""); setSourceFile(null);
+    setSourceUrl(""); setSourceText(""); setSourceFiles([]);
     setUrlMode("single"); setAutoRefresh(false); setAutoCrawl(false);
     setExclusionList([]); setExclusionInput("");
+    setUploadProgress({});
   };
 
   const addExclusion = (list: string[], setList: (l: string[]) => void, input: string, setInput: (s: string) => void) => {
