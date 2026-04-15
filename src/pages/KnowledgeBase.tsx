@@ -1018,9 +1018,45 @@ const KnowledgeBasePage = () => {
             </TabsContent>
 
             <TabsContent value="file" className="space-y-3 pt-3">
-              <Label>Upload File</Label>
-              <Input type="file" accept=".pdf,.docx,.txt,.csv" onChange={(e) => setSourceFile(e.target.files?.[0] || null)} />
-              <p className="text-xs text-muted-foreground">Supported: PDF, DOCX, TXT, CSV (max 20MB).</p>
+              <Label>Upload Files</Label>
+              <Input
+                type="file"
+                accept=".pdf,.docx,.txt,.csv,.xlsx,.xls"
+                multiple
+                onChange={(e) => {
+                  const files = Array.from(e.target.files || []);
+                  if (files.length > 25) {
+                    toast.error("Max 25 files at once");
+                    return;
+                  }
+                  const oversized = files.filter(f => f.size > 50 * 1024 * 1024);
+                  if (oversized.length) {
+                    toast.error(`${oversized[0].name} exceeds 50MB limit`);
+                    return;
+                  }
+                  setSourceFiles(files);
+                }}
+              />
+              {sourceFiles.length > 0 && (
+                <div className="space-y-1.5">
+                  {sourceFiles.map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 text-sm p-2 rounded-md bg-muted">
+                      <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      <span className="truncate flex-1">{f.name}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">{(f.size / 1024 / 1024).toFixed(1)}MB</span>
+                      {uploadProgress[f.name] !== undefined && (
+                        <Progress value={uploadProgress[f.name]} className="w-16 h-1.5" />
+                      )}
+                      <button onClick={() => setSourceFiles(sourceFiles.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-destructive">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Supported: PDF, DOCX, TXT, CSV, XLSX (max 50MB per file, 25 files per KB).
+              </p>
             </TabsContent>
 
             <TabsContent value="text" className="space-y-3 pt-3">
