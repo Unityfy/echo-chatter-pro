@@ -188,11 +188,29 @@ const KnowledgeBasePage = () => {
 
   // ─── KB CRUD ───────────────────────────────────────────────────────
 
+  const getOrCreateTeamId = async (): Promise<string | null> => {
+    if (teamId) return teamId;
+    if (!user) return null;
+    // Auto-create a personal team for solo users
+    const { data: newTeam, error: teamError } = await supabase
+      .from("teams")
+      .insert({ name: "My Workspace", created_by: user.id } as any)
+      .select()
+      .single();
+    if (teamError || !newTeam) { toast.error("Failed to create workspace"); return null; }
+    await supabase
+      .from("team_members")
+      .insert({ team_id: (newTeam as any).id, user_id: user.id, role: "admin" as any });
+    return (newTeam as any).id;
+  };
+
   const handleCreateKb = async () => {
-    if (!formName.trim() || !user || !teamId) return;
+    if (!formName.trim() || !user) return;
+    const resolvedTeamId = await getOrCreateTeamId();
+    if (!resolvedTeamId) return;
     const { data, error } = await supabase
       .from("knowledge_bases")
-      .insert({ name: formName.trim(), description: formDesc.trim(), team_id: teamId, created_by: user.id } as any)
+      .insert({ name: formName.trim(), description: formDesc.trim(), team_id: resolvedTeamId, created_by: user.id } as any)
       .select()
       .single();
     if (error) { toast.error("Failed to create knowledge base"); return; }
