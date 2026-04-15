@@ -1,20 +1,26 @@
 import { useState, useRef, useCallback } from "react";
-import { Mic, MicOff, Play, Square, Volume2, Cpu, Loader2 } from "lucide-react";
+import { Mic, MicOff, Play, Square, Volume2, Cpu, Loader2, Bug, Target, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { streamAgentChat, generateSpeech, transcribeAudio } from "@/services/agentService";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { ChevronDown } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { streamAgentChat, generateSpeech, transcribeAudio, type RAGDebugInfo } from "@/services/agentService";
 import { toast } from "sonner";
 
 interface AgentTestPanelProps {
   systemPrompt?: string;
   voiceName?: string;
+  agentId?: string;
 }
 
 type Message = { role: "user" | "assistant"; content: string };
 
-export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps) {
+export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPanelProps) {
   const [testMode, setTestMode] = useState<"audio" | "llm">("llm");
   const [isRunning, setIsRunning] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -23,6 +29,8 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
   const [textInput, setTextInput] = useState("");
   const [latency, setLatency] = useState<number | null>(null);
   const [recordingStartTime, setRecordingStartTime] = useState<number>(0);
+  const [showDebug, setShowDebug] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<RAGDebugInfo>(null);
   const abortRef = useRef<AbortController | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -48,6 +56,7 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
       await streamAgentChat({
         messages: updatedMessages,
         systemPrompt: systemPrompt || "You are a helpful AI voice agent. Keep responses concise and conversational.",
+        agentId,
         onDelta: (chunk) => {
           if (!latency) setLatency(Date.now() - startTime);
           assistantContent += chunk;
@@ -64,10 +73,12 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
           setLatency(Date.now() - startTime);
           setIsRunning(false);
         },
+        onDebug: (debug) => {
+          setDebugInfo(debug);
+        },
         signal: controller.signal,
       });
 
-      // If audio mode, speak the response
       if (testMode === "audio" && assistantContent) {
         setIsSpeaking(true);
         try {
@@ -86,7 +97,7 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
       }
       setIsRunning(false);
     }
-  }, [systemPrompt, testMode, voiceName, latency]);
+  }, [systemPrompt, testMode, voiceName, latency, agentId]);
 
   const handleTextSubmit = () => {
     if (!textInput.trim() || isRunning) return;
@@ -158,22 +169,27 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
     handleStop();
     setMessages([]);
     setLatency(null);
+    setDebugInfo(null);
   };
 
   return (
     <div className="flex flex-col h-full">
       {/* Test Mode Tabs */}
-      <div className="flex items-center justify-center px-4 py-3 border-b border-border">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <Tabs value={testMode} onValueChange={(v) => setTestMode(v as "audio" | "llm")}>
           <TabsList className="h-8">
             <TabsTrigger value="audio" className="text-xs px-3 h-7 gap-1.5">
-              <Volume2 className="h-3 w-3" /> Test Audio
+              <Volume2 className="h-3 w-3" /> Audio
             </TabsTrigger>
             <TabsTrigger value="llm" className="text-xs px-3 h-7 gap-1.5">
-              <Cpu className="h-3 w-3" /> Test LLM
+              <Cpu className="h-3 w-3" /> LLM
             </TabsTrigger>
           </TabsList>
         </Tabs>
+        <div className="flex items-center gap-1.5">
+          <Bug className="h-3 w-3 text-muted-foreground" />
+          <Switch checked={showDebug} onCheckedChange={setShowDebug} className="scale-75" />
+        </div>
       </div>
 
       {/* Messages Area */}
@@ -227,6 +243,71 @@ export function AgentTestPanel({ systemPrompt, voiceName }: AgentTestPanelProps)
           </>
         )}
       </div>
+
+      {/* Debug Panel */}
+      {showDebug && debugInfo && (
+        <div className="border-t border-border">
+          <Collapsible defaultOpen>
+            <CollapsibleTrigger className="flex items-center justify-between w-full px-3 py-2 hover:bg-muted/30 transition-colors">
+              <div className="flex items-center gap-1.5">
+                <Bug className="h-3 w-3 text-muted-foreground" />
+                <span className="text-[11px] font-medium text-muted-foreground">RAG Debug</span>
+              </div>
+              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="px-3 pb-3 space-y-2 max-h-[200px] overflow-y-auto">
+              {/* Detected Intent */}
+              <div className="flex items-center gap-1.5">
+                <Target className="h-3 w-3 text-muted-foreground shrink-0" />
+                <span className="text-[10px] text-muted-foreground">Intent:</span>
+                {debugInfo.detected_intent ? (
+                  <Badge variant="outline" className="text-[9px] h-4">
+                    {debugInfo.detected_intent}
+                  </Badge>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground italic">none</span>
+                )}
+                {debugInfo.intent_priority && (
+                  <Badge variant="secondary" className="text-[9px] h-4">
+                    {debugInfo.intent_priority.replace("_", " ")}
+                  </Badge>
+                )}
+              </div>
+
+              {/* Settings */}
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                <span>chunks: {debugInfo.settings.chunksToRetrieve}</span>
+                <span>·</span>
+                <span>threshold: {debugInfo.settings.similarityThreshold}</span>
+              </div>
+
+              {/* Retrieved chunks */}
+              {debugInfo.chunks.length > 0 ? (
+                <div className="space-y-1.5">
+                  {debugInfo.chunks.map((chunk, i) => (
+                    <div key={i} className="p-1.5 rounded bg-muted/50 border border-border space-y-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <BookOpen className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+                        <span className="text-[10px] font-medium truncate flex-1">{chunk.source}</span>
+                        <Badge
+                          variant={chunk.origin === "intent" ? "default" : "outline"}
+                          className="text-[8px] h-3.5 px-1"
+                        >
+                          {chunk.origin}
+                        </Badge>
+                        <span className="text-[9px] text-muted-foreground font-mono">{chunk.similarity}</span>
+                      </div>
+                      <p className="text-[9px] text-muted-foreground leading-tight truncate">{chunk.preview}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-[10px] text-muted-foreground italic">No chunks retrieved</p>
+              )}
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
+      )}
 
       {/* Latency Info */}
       {latency && (
