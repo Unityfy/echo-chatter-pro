@@ -683,11 +683,16 @@ async function runSession(opts: {
       apiKey: elevenKey,
       language: mapLanguageToScribe(agent.language),
       onPartial: (text) => {
-        // Early barge-in: if user starts producing words while agent is talking,
-        // cut the agent immediately rather than waiting for the final.
-        if (agentSpeaking && text && text.trim().length > 1) {
-          cancelAgentTurn("partial transcript");
-        }
+        // Early barge-in via STT partials. Ignore very short partials (≤2 chars
+        // are usually noise hallucinations on telephony lines), respect the
+        // post-cancel cooldown, and respect the post-TTS-start grace window.
+        if (!agentSpeaking) return;
+        const t = (text ?? "").trim();
+        if (t.length <= 2) return;
+        const now = Date.now();
+        if (now - lastCancelAt < BARGE_COOLDOWN_MS) return;
+        if (now - ttsStartedAt < BARGE_GRACE_AFTER_TTS_START_MS) return;
+        cancelAgentTurn("partial transcript");
       },
       onFinal: (text) => {
         const now = Date.now();
