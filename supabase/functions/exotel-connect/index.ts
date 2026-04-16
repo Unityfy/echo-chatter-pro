@@ -184,10 +184,22 @@ Deno.serve(async (req) => {
           friendly_name: n.FriendlyName || n.friendly_name || "",
           status: (n.Status || n.status || "active").toLowerCase(),
           sid: n.Sid || n.sid || "",
-        }));
-        return json({ numbers });
+        })).filter((n: any) => !!n.phone_number);
+
+        // Mark which numbers are already imported to this workspace
+        const phones = numbers.map((n: any) => n.phone_number);
+        const { data: existing } = await admin
+          .from("phone_numbers")
+          .select("phone_number")
+          .eq("team_id", teamId)
+          .in("phone_number", phones);
+        const importedSet = new Set((existing ?? []).map((r: any) => r.phone_number));
+        const enriched = numbers.map((n: any) => ({ ...n, already_imported: importedSet.has(n.phone_number) }));
+
+        return json({ numbers: enriched });
       } catch (e) {
-        return json({ error: `Exotel fetch failed: ${(e as Error).message}` }, 500);
+        console.error("Exotel list_numbers error:", e);
+        return json({ error: "Failed to fetch numbers from Exotel" }, 500);
       }
     }
 
@@ -197,7 +209,23 @@ Deno.serve(async (req) => {
       const selected = body.numbers as { phone_number: string; sid: string }[];
       if (!accountId || !selected?.length) return json({ error: "account_id and numbers[] required" }, 400);
 
-      const rows = selected.map((n) => ({
+      // Dedupe against existing phone_numbers in this team
+      const phones = selected.map((n) => n.phone_number);
+      const { data: existing } = await admin
+        .from("phone_numbers")
+        .select("phone_number")
+        .eq("team_id", teamId)
+        .in("phone_number", phones);
+      const existingSet = new Set((existing ?? []).map((r: any) => r.phone_number));
+
+      const fresh = selected.filter((n) => !existingSet.has(n.phone_number));
+      const skipped = selected.length - fresh.length;
+
+      if (fresh.length === 0) {
+        return json({ imported: [], skipped, message: "All selected numbers are already imported" });
+      }
+
+      const rows = fresh.map((n) => ({
         team_id: teamId,
         phone_number: n.phone_number,
         provider: "exotel",
@@ -208,8 +236,9 @@ Deno.serve(async (req) => {
 
       const { data, error } = await admin.from("phone_numbers").insert(rows).select();
       if (error) return json({ error: error.message }, 400);
-      return json({ imported: data });
+      return json({ imported: data, skipped });
     }
+
 
     // ─── DISCONNECT: remove account (cascade will nullify phone_numbers FK) ───
     if (action === "disconnect") {
