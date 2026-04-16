@@ -181,11 +181,11 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
             </div>
             <div className="space-y-2">
               <Label>API Key</Label>
-              <Input placeholder="API key from Exotel dashboard" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+              <Input type="password" autoComplete="off" placeholder="API key from Exotel dashboard" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>API Token</Label>
-              <Input type="password" placeholder="API token" value={apiToken} onChange={(e) => setApiToken(e.target.value)} />
+              <Input type="password" autoComplete="off" placeholder="API token" value={apiToken} onChange={(e) => setApiToken(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>Subdomain</Label>
@@ -197,15 +197,25 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
           </div>
         ) : step === "connected" ? (
           <div className="space-y-4">
-            {accounts.map((a) => (
-              <div key={a.id} className="flex items-center justify-between rounded-lg border border-border p-4">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-primary" />
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{a.account_sid}</p>
-                    <p className="text-xs text-muted-foreground">{a.subdomain}</p>
+            {accounts.map((a) => {
+              const maskedSid = a.account_sid.length > 4
+                ? `••••${a.account_sid.slice(-4)}`
+                : "••••";
+              return (
+                <div key={a.id} className="flex items-center justify-between rounded-lg border border-border p-4">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-primary" />
+                    <div>
+                      <p className="font-mono text-sm font-medium text-foreground">SID {maskedSid}</p>
+                      <p className="text-xs text-muted-foreground">{a.subdomain}</p>
+                      {(a.api_key_last4 || a.api_token_last4) && (
+                        <p className="font-mono text-xs text-muted-foreground">
+                          {a.api_key_last4 && <>Key ••••{a.api_key_last4} </>}
+                          {a.api_token_last4 && <>· Token ••••{a.api_token_last4}</>}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary">Connected</Badge>
                   <Button variant="ghost" size="sm" onClick={() => handleDisconnect(a.id)}>
