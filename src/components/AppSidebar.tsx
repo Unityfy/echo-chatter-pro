@@ -2,6 +2,7 @@ import {
   LayoutDashboard,
   Bot,
   Phone,
+  PhoneCall,
   Workflow,
   BarChart3,
   Plug,
@@ -36,7 +37,8 @@ interface NavItem {
 const mainItems: NavItem[] = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Agents", url: "/agents", icon: Bot, requiredPermission: "agents.view" },
-  { title: "Calls", url: "/calls", icon: Phone, requiredPermission: "calls.view" },
+  { title: "Calls", url: "/calls", icon: PhoneCall, requiredPermission: "calls.view" },
+  { title: "Phone Numbers", url: "/phone-numbers", icon: Phone, requiredPermission: "integrations.view" },
   { title: "Workflows", url: "/workflows", icon: Workflow, requiredPermission: "workflows.view" },
   { title: "Analytics", url: "/analytics", icon: BarChart3, requiredPermission: "analytics.view" },
   { title: "Integrations", url: "/integrations", icon: Plug, requiredPermission: "integrations.view" },
