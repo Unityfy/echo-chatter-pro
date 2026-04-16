@@ -378,6 +378,57 @@ export type Database = {
           },
         ]
       }
+      phone_numbers: {
+        Row: {
+          agent_id: string | null
+          created_at: string
+          id: string
+          phone_number: string
+          provider: string
+          provider_number_id: string | null
+          status: string
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          agent_id?: string | null
+          created_at?: string
+          id?: string
+          phone_number: string
+          provider?: string
+          provider_number_id?: string | null
+          status?: string
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          agent_id?: string | null
+          created_at?: string
+          id?: string
+          phone_number?: string
+          provider?: string
+          provider_number_id?: string | null
+          status?: string
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "phone_numbers_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "phone_numbers_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
