@@ -58,68 +58,54 @@ Deno.serve(async (req) => {
       const apiKey = (body.api_key as string)?.trim();
       const apiToken = (body.api_token as string)?.trim();
       const subdomain = (body.subdomain as string)?.trim() || "api.exotel.com";
+
+      // Input validation
       if (!sid || !apiKey || !apiToken)
         return json({ error: "account_sid, api_key, and api_token are required" }, 400);
+      if (sid.length < 3 || sid.length > 100)
+        return json({ error: "account_sid has invalid length" }, 400);
+      if (apiKey.length < 10 || apiKey.length > 200)
+        return json({ error: "api_key has invalid length" }, 400);
+      if (apiToken.length < 10 || apiToken.length > 200)
+        return json({ error: "api_token has invalid length" }, 400);
+      if (!/^[a-zA-Z0-9_-]+$/.test(sid))
+        return json({ error: "account_sid contains invalid characters" }, 400);
+      if (!/^[a-zA-Z0-9.-]+$/.test(subdomain))
+        return json({ error: "subdomain has invalid format" }, 400);
 
-      // Validate credentials by calling Exotel
+      // Validate credentials by calling Exotel — return user-safe error messages
       try {
         const r = await fetch(
           `https://${subdomain}/v1/Accounts/${sid}.json`,
           { headers: { Authorization: basicAuth(apiKey, apiToken) } },
         );
         if (!r.ok) {
-          const t = await r.text().catch(() => "");
-          return json({ error: `Exotel validation failed (${r.status}): ${t}` }, 400);
+          if (r.status === 401 || r.status === 403)
+            return json({ error: "Invalid Exotel credentials. Check your Account SID, API Key, and Token." }, 400);
+          if (r.status === 404)
+            return json({ error: "Exotel account not found. Verify your Account SID and subdomain." }, 400);
+          return json({ error: `Exotel rejected the request (HTTP ${r.status}). Please verify your credentials.` }, 400);
         }
       } catch (e) {
-        return json({ error: `Cannot reach Exotel: ${(e as Error).message}` }, 400);
+        console.error("Exotel validation network error:", e);
+        return json({ error: "Could not reach Exotel. Check your subdomain and try again." }, 400);
       }
 
-      // Encrypt & store
-      const { data: inserted, error: insErr } = await admin.rpc("_raw_sql" as any, {} as any).catch(() => ({ data: null, error: null }));
-      // Use raw SQL via admin client for pgp_sym_encrypt
-      const insertSql = `
-        INSERT INTO public.exotel_accounts (team_id, created_by, account_sid, subdomain, api_key_encrypted, api_token_encrypted, status, last_validated_at)
-        VALUES ($1, $2, $3, $4,
-          pgp_sym_encrypt($5, $6),
-          pgp_sym_encrypt($7, $8),
-          'connected', now())
-        ON CONFLICT (team_id, account_sid) DO UPDATE SET
-          api_key_encrypted = pgp_sym_encrypt($5, $6),
-          api_token_encrypted = pgp_sym_encrypt($7, $8),
-          subdomain = $4,
-          status = 'connected',
-          last_validated_at = now(),
-          updated_at = now()
-        RETURNING id, account_sid, subdomain, status, last_validated_at, created_at;
-      `;
-
-      // Use the Supabase REST SQL endpoint via service role
-      const sqlRes = await fetch(`${SUPABASE_URL}/rest/v1/rpc/`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${SERVICE_ROLE}`,
-          apikey: SERVICE_ROLE,
-          "Content-Type": "application/json",
-        },
-      }).catch(() => null);
-
-      // Since we can't run raw SQL via PostgREST, use the pg wire protocol via
-      // the Supabase management API. Alternatively, we run the query through a
-      // DB function. For simplicity, we call the DB directly using the DB URL.
+      // Encrypt & store via direct DB connection (pgp_sym_encrypt isn't exposed via PostgREST)
       const DB_URL = Deno.env.get("SUPABASE_DB_URL");
       if (!DB_URL) {
-        // Fallback: insert without encryption (store as text cast to bytea)
-        // This should not happen in production.
-        return json({ error: "Database URL not configured for encrypted storage" }, 500);
+        console.error("SUPABASE_DB_URL not configured");
+        return json({ error: "Server misconfigured" }, 500);
       }
 
-      // Use Deno Postgres
       const { Client } = await import("https://deno.land/x/postgres@v0.19.3/mod.ts");
       const client = new Client(DB_URL);
-      await client.connect();
       try {
-        const result = await client.queryObject(
+        await client.connect();
+        const result = await client.queryObject<{
+          id: string; account_sid: string; subdomain: string; status: string;
+          last_validated_at: string; created_at: string;
+        }>(
           `INSERT INTO public.exotel_accounts (team_id, created_by, account_sid, subdomain, api_key_encrypted, api_token_encrypted, status, last_validated_at)
            VALUES ($1, $2, $3, $4,
              pgp_sym_encrypt($5, $6),
@@ -135,12 +121,20 @@ Deno.serve(async (req) => {
            RETURNING id, account_sid, subdomain, status, last_validated_at, created_at`,
           [teamId, userId, sid, subdomain, apiKey, ENC_KEY, apiToken, ENC_KEY],
         );
-        await client.end();
-        return json({ account: result.rows[0] });
+        const row = result.rows[0];
+        // Return only metadata + masked previews — never the raw secrets
+        return json({
+          account: {
+            ...row,
+            api_key_last4: apiKey.slice(-4),
+            api_token_last4: apiToken.slice(-4),
+          },
+        });
       } catch (e) {
-        await client.end().catch(() => {});
         console.error("DB insert error:", e);
-        return json({ error: (e as Error).message }, 500);
+        return json({ error: "Failed to store credentials securely" }, 500);
+      } finally {
+        await client.end().catch(() => {});
       }
     }
 
