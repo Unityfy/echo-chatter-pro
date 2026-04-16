@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, Plug, Unplug, RefreshCw } from "lucide-react";
+import { Loader2, CheckCircle2, Plug, Unplug, RefreshCw, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
@@ -20,6 +20,7 @@ interface ExotelAccount {
   created_at: string;
   api_key_last4?: string | null;
   api_token_last4?: string | null;
+  webhook_url?: string | null;
 }
 
 interface ExotelNumber {
