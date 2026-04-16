@@ -151,10 +151,10 @@ function int16ToBase64(pcm: Int16Array): string {
   return bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
 }
 
-// ─── Lightweight VAD for barge-in detection ────────────────────────────────
-// We don't run STT during agent speech (too expensive); instead we watch
-// inbound RMS energy on caller audio and trigger a barge-in if it stays
-// above threshold for ~150 ms.
+// ─── Adaptive VAD for barge-in detection ───────────────────────────────────
+// Hybrid VAD: continuous noise-floor calibration + adaptive threshold +
+// sustained-energy gating. Telephony lines vary widely (background hum on
+// Indian mobile networks especially), so a fixed RMS cutoff misfires.
 
 function rms(pcm: Int16Array): number {
   let acc = 0;
@@ -162,8 +162,35 @@ function rms(pcm: Int16Array): number {
   return Math.sqrt(acc / pcm.length);
 }
 
-const BARGE_RMS_THRESHOLD = 1200; // empirical for telephony μ-law
-const BARGE_SUSTAINED_MS = 150;
+// Tuning constants — calibrated for 8 kHz μ-law telephony.
+const BARGE_SUSTAINED_MS = 120;              // user must speak ≥120 ms to interrupt
+const BARGE_MIN_RATIO = 3.5;                 // energy ≥ 3.5× current noise floor
+const BARGE_MIN_ABSOLUTE = 800;              // absolute floor so silence never triggers
+const BARGE_COOLDOWN_MS = 400;               // ignore barges shortly after a cancel
+const BARGE_GRACE_AFTER_TTS_START_MS = 250;  // ignore first 250ms of agent speech
+const NOISE_EMA_ALPHA = 0.05;                // slow EMA — adapts in ~1-2 s of silence
+
+class AdaptiveVad {
+  private noiseFloor = 200;
+  private bargeStartedAt: number | null = null;
+
+  observeQuiet(energy: number) {
+    this.noiseFloor = (1 - NOISE_EMA_ALPHA) * this.noiseFloor + NOISE_EMA_ALPHA * energy;
+  }
+
+  shouldBarge(energy: number, now: number): boolean {
+    const dynamicThreshold = Math.max(BARGE_MIN_ABSOLUTE, this.noiseFloor * BARGE_MIN_RATIO);
+    if (energy >= dynamicThreshold) {
+      if (this.bargeStartedAt === null) this.bargeStartedAt = now;
+      return now - this.bargeStartedAt >= BARGE_SUSTAINED_MS;
+    }
+    this.bargeStartedAt = null;
+    return false;
+  }
+
+  reset() { this.bargeStartedAt = null; }
+  get floor() { return this.noiseFloor; }
+}
 
 // ─── Agent loader ──────────────────────────────────────────────────────────
 
@@ -503,27 +530,53 @@ async function runSession(opts: {
   let agentSpeaking = false;
   let ttsAbort: AbortController | null = null;
   let llmAbort: AbortController | null = null;
-  let bargeStartedAt: number | null = null;
   let lastFinalAt = 0;
+  let lastCancelAt = 0;          // for cooldown debounce
+  let ttsStartedAt = 0;          // for grace-period after agent starts speaking
+  let turnSeq = 0;               // monotonic id, prevents stale TTS chunks slipping in
+  let assistantPartial = "";     // text spoken so far this turn (preserved on barge)
+  const vad = new AdaptiveVad();
 
-  const sendAudioToCaller = (mulaw: Uint8Array) => {
+  const sendAudioToCaller = (mulaw: Uint8Array, ownerSeq: number) => {
+    // Drop frames whose turn has been cancelled — guards against late chunks
+    // arriving from an aborted TTS stream and re-flooding the caller.
+    if (ownerSeq !== turnSeq) return;
     if (socket.readyState !== WebSocket.OPEN) return;
-    // Chop into ~20ms frames (160 bytes @ 8kHz μ-law) for smooth playback.
-    const FRAME = 160;
+    const FRAME = 160; // ~20ms @ 8kHz μ-law
     for (let i = 0; i < mulaw.length; i += FRAME) {
       const slice = mulaw.subarray(i, Math.min(i + FRAME, mulaw.length));
       socket.send(provider.formatOutboundAudio(streamSid, bytesToBase64(slice)));
     }
   };
 
+  /** Cancel the in-flight agent turn. Idempotent within a single turn. */
   const cancelAgentTurn = (reason: string) => {
     if (!agentSpeaking) return;
-    console.log(`barge-in / cancel: ${reason}`);
+    console.log(`barge-in: ${reason} (floor=${vad.floor.toFixed(0)})`);
+    turnSeq++;                   // any pending TTS bytes from this turn now stale
     try { llmAbort?.abort(); } catch { /* */ }
     try { ttsAbort?.abort(); } catch { /* */ }
     const clearMsg = provider.formatClear(streamSid);
     if (clearMsg && socket.readyState === WebSocket.OPEN) socket.send(clearMsg);
     agentSpeaking = false;
+    lastCancelAt = Date.now();
+    vad.reset();
+
+    // Preserve interrupted assistant text in history so context survives the
+    // barge — flagged as [interrupted] so the LLM knows the user cut in.
+    if (assistantPartial.trim()) {
+      const partial = assistantPartial.trim();
+      history.push({ role: "assistant", content: `${partial} [interrupted]` });
+      if (callId) {
+        supabase.from("calls").select("metadata").eq("id", callId).maybeSingle()
+          .then(({ data }) =>
+            appendTranscript(supabase, callId, (data?.metadata ?? {}) as Record<string, unknown>, {
+              role: "assistant", text: `${partial} [interrupted]`,
+            }))
+          .then(() => undefined, (e) => console.error("transcript append (interrupted) failed:", e));
+      }
+    }
+    assistantPartial = "";
   };
 
   const speakAndAdvance = async (userText: string) => {
@@ -538,8 +591,11 @@ async function runSession(opts: {
     }
 
     agentSpeaking = true;
+    ttsStartedAt = Date.now();
     llmAbort = new AbortController();
     ttsAbort = new AbortController();
+    assistantPartial = "";
+    const mySeq = turnSeq;       // capture for stale-chunk guard
 
     let assistantBuf = "";
     try {
@@ -550,14 +606,15 @@ async function runSession(opts: {
         history,
         signal: llmAbort.signal,
         onSentence: async (sentence) => {
-          if (!agentSpeaking) return;
+          if (!agentSpeaking || mySeq !== turnSeq) return;
+          assistantPartial += (assistantPartial ? " " : "") + sentence;
           try {
             await streamTts({
               apiKey: elevenKey,
               text: sentence,
               voiceId,
               signal: ttsAbort!.signal,
-              onChunk: (mulaw) => sendAudioToCaller(mulaw),
+              onChunk: (mulaw) => sendAudioToCaller(mulaw, mySeq),
             });
           } catch (e) {
             if ((e as Error).name !== "AbortError") console.error("TTS chunk error:", e);
@@ -569,7 +626,8 @@ async function runSession(opts: {
       if ((e as Error).name !== "AbortError") console.error("LLM stream error:", e);
     }
 
-    if (assistantBuf) {
+    // If we completed without barge-in, persist the full assistant turn.
+    if (mySeq === turnSeq && assistantBuf) {
       history.push({ role: "assistant", content: assistantBuf });
       if (callId) {
         try {
@@ -580,7 +638,10 @@ async function runSession(opts: {
         } catch (e) { console.error("transcript append (assistant) failed:", e); }
       }
     }
-    agentSpeaking = false;
+    if (mySeq === turnSeq) {
+      agentSpeaking = false;
+      assistantPartial = "";
+    }
   };
 
   // ── STT session (with fallback on failure) ───────────────────────────────
@@ -611,7 +672,7 @@ async function runSession(opts: {
         text: "One moment, transferring you to a human agent.",
         voiceId,
         signal: ab.signal,
-        onChunk: (mulaw) => sendAudioToCaller(mulaw),
+        onChunk: (mulaw) => sendAudioToCaller(mulaw, turnSeq),
       });
     } catch { /* */ }
     try { socket.close(1011, "stt-fallback"); } catch { /* */ }
@@ -622,11 +683,16 @@ async function runSession(opts: {
       apiKey: elevenKey,
       language: mapLanguageToScribe(agent.language),
       onPartial: (text) => {
-        // Early barge-in: if user starts producing words while agent is talking,
-        // cut the agent immediately rather than waiting for the final.
-        if (agentSpeaking && text && text.trim().length > 1) {
-          cancelAgentTurn("partial transcript");
-        }
+        // Early barge-in via STT partials. Ignore very short partials (≤2 chars
+        // are usually noise hallucinations on telephony lines), respect the
+        // post-cancel cooldown, and respect the post-TTS-start grace window.
+        if (!agentSpeaking) return;
+        const t = (text ?? "").trim();
+        if (t.length <= 2) return;
+        const now = Date.now();
+        if (now - lastCancelAt < BARGE_COOLDOWN_MS) return;
+        if (now - ttsStartedAt < BARGE_GRACE_AFTER_TTS_START_MS) return;
+        cancelAgentTurn("partial transcript");
       },
       onFinal: (text) => {
         const now = Date.now();
@@ -682,18 +748,26 @@ async function runSession(opts: {
     // event.type === "audio"
     const mulaw = base64ToBytes(event.mulawB64);
     const pcm16k = mulaw8kToPcm16k(mulaw);
+    const energy = rms(pcm16k);
+    const now = Date.now();
 
-    // Barge-in: while agent is speaking, watch energy
     if (agentSpeaking) {
-      const energy = rms(pcm16k);
-      if (energy > BARGE_RMS_THRESHOLD) {
-        if (bargeStartedAt === null) bargeStartedAt = Date.now();
-        else if (Date.now() - bargeStartedAt > BARGE_SUSTAINED_MS) {
-          cancelAgentTurn("VAD energy");
-          bargeStartedAt = null;
-        }
-      } else {
-        bargeStartedAt = null;
+      // Cooldown after a recent cancel — prevents flicker on rapid interrupts.
+      const inCooldown = now - lastCancelAt < BARGE_COOLDOWN_MS;
+      // Grace period: caller mic often picks up onset of agent's own audio
+      // via speakerphone echo; ignore the very first ~250ms of agent speech.
+      const inGrace = now - ttsStartedAt < BARGE_GRACE_AFTER_TTS_START_MS;
+
+      if (!inCooldown && !inGrace && vad.shouldBarge(energy, now)) {
+        cancelAgentTurn("VAD energy");
+      }
+      // While agent is speaking we don't update the noise floor — outbound
+      // echo would poison the calibration.
+    } else {
+      // Calibrate noise floor while caller is silent (only update on quiet
+      // frames; loud frames are presumed speech and would skew the floor).
+      if (energy < Math.max(BARGE_MIN_ABSOLUTE, vad.floor * 2)) {
+        vad.observeQuiet(energy);
       }
     }
 
