@@ -191,10 +191,13 @@ Deno.serve(async (req) => {
       return sayAndHangup("No agent is available right now. Please try again later. Goodbye.");
     }
 
-    // 6) Agent assigned → connect to streaming voicebot
-    // The WS endpoint is a separate edge function (exotel-voice-stream) that handles
-    // STT → LLM → TTS over Exotel's Voicebot Applet protocol.
-    const wsUrl = `${SUPABASE_URL.replace(/^https?:/, "wss:")}/functions/v1/exotel-voice-stream?agent_id=${pn.agent_id}&call_sid=${encodeURIComponent(callSid ?? "")}`;
+    // 6) Agent assigned → connect to streaming voicebot.
+    // voice-stream is provider-agnostic; we pass ?provider=exotel so its
+    // adapter knows how to parse/format frames.
+    const wsUrl =
+      `${SUPABASE_URL.replace(/^https?:/, "wss:")}/functions/v1/voice-stream` +
+      `?provider=exotel&agent_id=${pn.agent_id}` +
+      `&call_sid=${encodeURIComponent(callSid ?? "")}`;
 
     await logCall({
       status: "in-progress",
