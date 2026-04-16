@@ -216,14 +216,15 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
                       )}
                     </div>
                   </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">Connected</Badge>
-                  <Button variant="ghost" size="sm" onClick={() => handleDisconnect(a.id)}>
-                    <Unplug className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">Connected</Badge>
+                    <Button variant="ghost" size="sm" onClick={() => handleDisconnect(a.id)}>
+                      <Unplug className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-2">
