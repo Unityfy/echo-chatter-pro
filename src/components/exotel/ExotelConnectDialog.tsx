@@ -248,25 +248,66 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
             })}
           </div>
         ) : (
-          <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-2">
-            {numbers.map((n) => (
-              <label
-                key={n.phone_number}
-                className="flex cursor-pointer items-center gap-3 rounded-md p-2 hover:bg-muted/50"
-              >
+          <div className="space-y-2">
+            <div className="flex items-center justify-between rounded-md border border-border p-2">
+              <label className="flex cursor-pointer items-center gap-2">
                 <Checkbox
-                  checked={selected.has(n.phone_number)}
-                  onCheckedChange={() => toggleNumber(n.phone_number)}
+                  checked={allImportableSelected}
+                  disabled={importableNumbers.length === 0}
+                  onCheckedChange={toggleSelectAll}
                 />
-                <div className="flex-1">
-                  <p className="font-mono text-sm text-foreground">{n.phone_number}</p>
-                  {n.friendly_name && (
-                    <p className="text-xs text-muted-foreground">{n.friendly_name}</p>
-                  )}
-                </div>
-                <Badge variant="outline" className="text-xs capitalize">{n.status}</Badge>
+                <span className="text-sm text-foreground">
+                  Select all
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    ({importableNumbers.length} importable · {numbers.length - importableNumbers.length} already imported)
+                  </span>
+                </span>
               </label>
-            ))}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleFetchNumbers(true)}
+                disabled={fetchingNumbers}
+              >
+                {fetchingNumbers ? (
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-3 w-3" />
+                )}
+                Sync
+              </Button>
+            </div>
+
+            <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+              {numbers.map((n) => {
+                const isImported = !!n.already_imported;
+                return (
+                  <label
+                    key={n.phone_number}
+                    className={`flex items-center gap-3 rounded-md p-2 ${
+                      isImported ? "opacity-60" : "cursor-pointer hover:bg-muted/50"
+                    }`}
+                  >
+                    <Checkbox
+                      checked={selected.has(n.phone_number)}
+                      disabled={isImported}
+                      onCheckedChange={() => !isImported && toggleNumber(n.phone_number)}
+                    />
+                    <div className="flex-1">
+                      <p className="font-mono text-sm text-foreground">{n.phone_number}</p>
+                      {n.friendly_name && (
+                        <p className="text-xs text-muted-foreground">{n.friendly_name}</p>
+                      )}
+                    </div>
+                    {isImported ? (
+                      <Badge variant="secondary" className="text-xs">Imported</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-xs">Not imported</Badge>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -286,7 +327,7 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
                 <Plug className="mr-2 h-4 w-4" />
                 Add Another
               </Button>
-              <Button onClick={handleFetchNumbers} disabled={fetchingNumbers}>
+              <Button onClick={() => handleFetchNumbers(false)} disabled={fetchingNumbers}>
                 {fetchingNumbers && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Fetch Numbers
               </Button>
