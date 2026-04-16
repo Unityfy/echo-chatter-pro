@@ -227,6 +227,56 @@ export type Database = {
           },
         ]
       }
+      exotel_accounts: {
+        Row: {
+          account_sid: string
+          api_key_encrypted: string
+          api_token_encrypted: string
+          created_at: string
+          created_by: string
+          id: string
+          last_validated_at: string | null
+          status: string
+          subdomain: string
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          account_sid: string
+          api_key_encrypted: string
+          api_token_encrypted: string
+          created_at?: string
+          created_by: string
+          id?: string
+          last_validated_at?: string | null
+          status?: string
+          subdomain?: string
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          account_sid?: string
+          api_key_encrypted?: string
+          api_token_encrypted?: string
+          created_at?: string
+          created_by?: string
+          id?: string
+          last_validated_at?: string | null
+          status?: string
+          subdomain?: string
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "exotel_accounts_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       knowledge_bases: {
         Row: {
           created_at: string
@@ -382,6 +432,7 @@ export type Database = {
         Row: {
           agent_id: string | null
           created_at: string
+          exotel_account_id: string | null
           id: string
           phone_number: string
           provider: string
@@ -393,6 +444,7 @@ export type Database = {
         Insert: {
           agent_id?: string | null
           created_at?: string
+          exotel_account_id?: string | null
           id?: string
           phone_number: string
           provider?: string
@@ -404,6 +456,7 @@ export type Database = {
         Update: {
           agent_id?: string | null
           created_at?: string
+          exotel_account_id?: string | null
           id?: string
           phone_number?: string
           provider?: string
@@ -418,6 +471,13 @@ export type Database = {
             columns: ["agent_id"]
             isOneToOne: false
             referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "phone_numbers_exotel_account_id_fkey"
+            columns: ["exotel_account_id"]
+            isOneToOne: false
+            referencedRelation: "exotel_accounts"
             referencedColumns: ["id"]
           },
           {
