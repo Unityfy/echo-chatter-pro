@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Phone, Plus, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart } from "lucide-react";
+import { Phone, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart, Search, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -95,22 +95,34 @@ export default function PhoneNumbers() {
     return data?.team_id ?? null;
   };
 
-  const handleBuy = async () => {
-    const tid = await resolveTeamId();
-    if (!tid) return toast.error("No workspace found");
-    // Simulated provisioning — generate a placeholder Indian-style number
-    const generated = `+91${Math.floor(7000000000 + Math.random() * 999999999)}`;
-    const { error } = await db.from("phone_numbers").insert({
-      team_id: tid,
-      phone_number: generated,
-      provider: "exotel",
-      provider_number_id: `exo_${Date.now()}`,
-      status: "active",
+  const handleSearch = async () => {
+    setSearching(true);
+    setAvailable([]);
+    const { data, error } = await supabase.functions.invoke("exotel-numbers", {
+      body: { action: "list_available", country: buyCountry, number_type: buyType },
     });
+    setSearching(false);
     if (error) return toast.error(error.message);
-    toast.success(`Number ${generated} provisioned`);
+    const list = (data as any)?.numbers ?? [];
+    if (list.length === 0) return toast.info("No numbers available right now");
+    setAvailable(list);
+  };
+
+  const handlePurchase = async (phone_number: string) => {
+    setPurchasing(phone_number);
+    const { data, error } = await supabase.functions.invoke("exotel-numbers", {
+      body: { action: "purchase", phone_number, number_type: buyType },
+    });
+    setPurchasing(null);
+    if (error) return toast.error(error.message);
+    const status = (data as any)?.status;
+    toast.success(
+      status === "active"
+        ? `${phone_number} purchased and active`
+        : `${phone_number} reserved — pending Exotel approval`,
+    );
     setBuyOpen(false);
-    setAreaCode("");
+    setAvailable([]);
     load();
   };
 
