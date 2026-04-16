@@ -649,7 +649,7 @@ async function runSession(opts: {
   const { socket, provider, agent, callId, supabase, lovableKey, elevenKey } = opts;
   const startedAtMs = Date.now();
 
-  let streamSid = "";
+  let sessionId = ""; // opaque provider-issued id (stream_sid / streamSid / streamId)
   const history: { role: "user" | "assistant"; content: string }[] = [];
   const systemPrompt =
     (agent.prompt && agent.prompt.trim()) ||
@@ -676,7 +676,7 @@ async function runSession(opts: {
     const FRAME = 160; // ~20ms @ 8kHz μ-law
     for (let i = 0; i < mulaw.length; i += FRAME) {
       const slice = mulaw.subarray(i, Math.min(i + FRAME, mulaw.length));
-      socket.send(provider.formatOutboundAudio(streamSid, bytesToBase64(slice)));
+      socket.send(provider.formatOutboundAudio(sessionId, bytesToBase64(slice)));
     }
   };
 
@@ -687,7 +687,7 @@ async function runSession(opts: {
     turnSeq++;                   // any pending TTS bytes from this turn now stale
     try { llmAbort?.abort(); } catch { /* */ }
     try { ttsAbort?.abort(); } catch { /* */ }
-    const clearMsg = provider.formatClear(streamSid);
+    const clearMsg = provider.formatClear(sessionId);
     if (clearMsg && socket.readyState === WebSocket.OPEN) socket.send(clearMsg);
     agentSpeaking = false;
     lastCancelAt = Date.now();
