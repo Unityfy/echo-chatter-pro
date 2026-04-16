@@ -245,27 +245,79 @@ interface SttHandle {
   close(): void;
 }
 
+/** Map an agent's free-form language string to a scribe ISO 639-3 code.
+ *  For Indian callers we leave language unset by default so scribe can
+ *  auto-detect English / Hindi / code-switched speech (very common on IN calls).
+ *  Only force a code when the agent is explicitly single-language. */
+function mapLanguageToScribe(lang: string | null | undefined): string | null {
+  if (!lang) return null;
+  const l = lang.toLowerCase();
+  if (l.includes("hindi")) return "hin";
+  if (l.includes("tamil")) return "tam";
+  if (l.includes("telugu")) return "tel";
+  if (l.includes("kannada")) return "kan";
+  if (l.includes("malayalam")) return "mal";
+  if (l.includes("marathi")) return "mar";
+  if (l.includes("bengali")) return "ben";
+  if (l.includes("gujarati")) return "guj";
+  if (l.includes("punjabi")) return "pan";
+  // "English", "Indian English", "Multilingual", "Auto" → let scribe decide
+  return null;
+}
+
+/** First-time token request to ElevenLabs realtime scribe. We use a
+ *  single-use token (preferred path) and fall back to subprotocol auth. */
+async function getScribeToken(apiKey: string): Promise<string | null> {
+  try {
+    const resp = await fetch(
+      "https://api.elevenlabs.io/v1/single-use-token/realtime_scribe",
+      { method: "POST", headers: { "xi-api-key": apiKey } },
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data?.token ?? null;
+  } catch (e) {
+    console.error("scribe token fetch failed:", e);
+    return null;
+  }
+}
+
 function openSttSession(opts: {
   apiKey: string;
   language?: string | null;
   onPartial?: (text: string) => void;
   onFinal: (text: string) => void;
   onError?: (err: unknown) => void;
+  onClose?: (info: { code: number; reason: string; clean: boolean }) => void;
 }): Promise<SttHandle> {
-  return new Promise((resolve, reject) => {
-    // Single-use token then WS — but ElevenLabs realtime accepts xi-api-key as
-    // a query param for server-to-server; we use direct API key here since
-    // this is server-side code, not browser.
-    const url =
-      `wss://api.elevenlabs.io/v1/realtime/scribe?model_id=scribe_v2_realtime` +
-      `&audio_format=pcm_16000&commit_strategy=vad` +
-      (opts.language ? `&language_code=${encodeURIComponent(opts.language)}` : "");
-    const ws = new WebSocket(url, [`xi-api-key.${opts.apiKey}`]);
+  return new Promise(async (resolve, reject) => {
+    const langParam = opts.language ? `&language_code=${encodeURIComponent(opts.language)}` : "";
+    // Prefer single-use-token auth (recommended); fall back to subprotocol header.
+    const token = await getScribeToken(opts.apiKey);
+    const url = token
+      ? `wss://api.elevenlabs.io/v1/realtime/scribe?model_id=scribe_v2_realtime` +
+        `&audio_format=pcm_16000&commit_strategy=vad${langParam}` +
+        `&token=${encodeURIComponent(token)}`
+      : `wss://api.elevenlabs.io/v1/realtime/scribe?model_id=scribe_v2_realtime` +
+        `&audio_format=pcm_16000&commit_strategy=vad${langParam}`;
+
+    const ws = token
+      ? new WebSocket(url)
+      : new WebSocket(url, [`xi-api-key.${opts.apiKey}`]);
 
     let opened = false;
+    // STT sessions can occasionally idle out; we surface that via onClose so the
+    // session orchestrator can decide to fall back rather than die silently.
+    const openTimeout = setTimeout(() => {
+      if (!opened) {
+        try { ws.close(); } catch { /* */ }
+        reject(new Error("STT websocket open timeout"));
+      }
+    }, 5000);
 
     ws.onopen = () => {
       opened = true;
+      clearTimeout(openTimeout);
       resolve({
         send(pcm16kBase64) {
           if (ws.readyState === WebSocket.OPEN) {
@@ -276,9 +328,7 @@ function openSttSession(opts: {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "commit" }));
         },
         close() {
-          try {
-            ws.close();
-          } catch { /* ignore */ }
+          try { ws.close(); } catch { /* ignore */ }
         },
       });
     };
@@ -302,8 +352,15 @@ function openSttSession(opts: {
 
     ws.onerror = (e) => {
       console.error("STT ws error", e);
-      if (!opened) reject(new Error("STT websocket failed to open"));
+      if (!opened) {
+        clearTimeout(openTimeout);
+        reject(new Error("STT websocket failed to open"));
+      }
       opts.onError?.(e);
+    };
+
+    ws.onclose = (e) => {
+      opts.onClose?.({ code: e.code, reason: e.reason, clean: e.wasClean });
     };
   });
 }
@@ -526,26 +583,70 @@ async function runSession(opts: {
     agentSpeaking = false;
   };
 
-  // ── STT session ──────────────────────────────────────────────────────────
+  // ── STT session (with fallback on failure) ───────────────────────────────
   let stt: SttHandle | null = null;
+  let sttFailed = false;
+
+  const triggerFallback = async (reason: string) => {
+    if (sttFailed) return;
+    sttFailed = true;
+    console.error(`STT fallback triggered: ${reason}`);
+    if (callId) {
+      try {
+        const { data } = await supabase.from("calls").select("metadata").eq("id", callId).maybeSingle();
+        const meta = (data?.metadata ?? {}) as Record<string, unknown>;
+        await supabase.from("calls").update({
+          status: "fallback",
+          metadata: { ...meta, stt_error: reason, fallback_at: new Date().toISOString() },
+        }).eq("id", callId);
+      } catch (e) { console.error("fallback meta update failed:", e); }
+    }
+    cancelAgentTurn("stt fallback");
+    // Speak a brief handoff line if TTS still works, then close so Exotel's
+    // ExoML <Dial> fallback (configured on the App) can take over the leg.
+    try {
+      const ab = new AbortController();
+      await streamTts({
+        apiKey: elevenKey,
+        text: "One moment, transferring you to a human agent.",
+        voiceId,
+        signal: ab.signal,
+        onChunk: (mulaw) => sendAudioToCaller(mulaw),
+      });
+    } catch { /* */ }
+    try { socket.close(1011, "stt-fallback"); } catch { /* */ }
+  };
+
   try {
     stt = await openSttSession({
       apiKey: elevenKey,
-      language: agent.language && agent.language.toLowerCase().startsWith("en") ? "eng" : null,
+      language: mapLanguageToScribe(agent.language),
+      onPartial: (text) => {
+        // Early barge-in: if user starts producing words while agent is talking,
+        // cut the agent immediately rather than waiting for the final.
+        if (agentSpeaking && text && text.trim().length > 1) {
+          cancelAgentTurn("partial transcript");
+        }
+      },
       onFinal: (text) => {
         const now = Date.now();
         if (now - lastFinalAt < 250) return; // debounce duplicate finals
         lastFinalAt = now;
-        // If the agent was speaking and the user already barged in via VAD,
-        // we already cancelled. If barge happened only on the final transcript,
-        // cancel now.
         cancelAgentTurn("user final transcript");
         speakAndAdvance(text).catch((e) => console.error("turn error:", e));
+      },
+      onError: (err) => {
+        console.error("STT runtime error:", err);
+      },
+      onClose: ({ code, reason, clean }) => {
+        if (!clean && socket.readyState === WebSocket.OPEN && !sttFailed) {
+          triggerFallback(`stt closed code=${code} reason=${reason || "n/a"}`);
+        }
       },
     });
   } catch (e) {
     console.error("STT open failed:", e);
-    socket.close(1011, "stt-unavailable");
+    await triggerFallback(`stt open failed: ${(e as Error).message}`);
     return;
   }
 
