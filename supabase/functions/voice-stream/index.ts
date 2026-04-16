@@ -672,7 +672,7 @@ async function runSession(opts: {
         text: "One moment, transferring you to a human agent.",
         voiceId,
         signal: ab.signal,
-        onChunk: (mulaw) => sendAudioToCaller(mulaw),
+        onChunk: (mulaw) => sendAudioToCaller(mulaw, turnSeq),
       });
     } catch { /* */ }
     try { socket.close(1011, "stt-fallback"); } catch { /* */ }
