@@ -743,18 +743,26 @@ async function runSession(opts: {
     // event.type === "audio"
     const mulaw = base64ToBytes(event.mulawB64);
     const pcm16k = mulaw8kToPcm16k(mulaw);
+    const energy = rms(pcm16k);
+    const now = Date.now();
 
-    // Barge-in: while agent is speaking, watch energy
     if (agentSpeaking) {
-      const energy = rms(pcm16k);
-      if (energy > BARGE_RMS_THRESHOLD) {
-        if (bargeStartedAt === null) bargeStartedAt = Date.now();
-        else if (Date.now() - bargeStartedAt > BARGE_SUSTAINED_MS) {
-          cancelAgentTurn("VAD energy");
-          bargeStartedAt = null;
-        }
-      } else {
-        bargeStartedAt = null;
+      // Cooldown after a recent cancel — prevents flicker on rapid interrupts.
+      const inCooldown = now - lastCancelAt < BARGE_COOLDOWN_MS;
+      // Grace period: caller mic often picks up onset of agent's own audio
+      // via speakerphone echo; ignore the very first ~250ms of agent speech.
+      const inGrace = now - ttsStartedAt < BARGE_GRACE_AFTER_TTS_START_MS;
+
+      if (!inCooldown && !inGrace && vad.shouldBarge(energy, now)) {
+        cancelAgentTurn("VAD energy");
+      }
+      // While agent is speaking we don't update the noise floor — outbound
+      // echo would poison the calibration.
+    } else {
+      // Calibrate noise floor while caller is silent (only update on quiet
+      // frames; loud frames are presumed speech and would skew the floor).
+      if (energy < Math.max(BARGE_MIN_ABSOLUTE, vad.floor * 2)) {
+        vad.observeQuiet(energy);
       }
     }
 
