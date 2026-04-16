@@ -298,6 +298,21 @@ export default function PhoneNumbers() {
         )}
       </div>
 
+      {exotelConnected === false && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Exotel not connected</AlertTitle>
+          <AlertDescription className="flex items-center justify-between gap-3">
+            <span>
+              Connect your Exotel account in Integrations to import numbers and place calls.
+            </span>
+            <Button asChild size="sm" variant="outline">
+              <RouterLink to="/integrations">Go to Integrations</RouterLink>
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">All numbers</CardTitle>
