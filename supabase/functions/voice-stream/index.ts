@@ -530,27 +530,53 @@ async function runSession(opts: {
   let agentSpeaking = false;
   let ttsAbort: AbortController | null = null;
   let llmAbort: AbortController | null = null;
-  let bargeStartedAt: number | null = null;
   let lastFinalAt = 0;
+  let lastCancelAt = 0;          // for cooldown debounce
+  let ttsStartedAt = 0;          // for grace-period after agent starts speaking
+  let turnSeq = 0;               // monotonic id, prevents stale TTS chunks slipping in
+  let assistantPartial = "";     // text spoken so far this turn (preserved on barge)
+  const vad = new AdaptiveVad();
 
-  const sendAudioToCaller = (mulaw: Uint8Array) => {
+  const sendAudioToCaller = (mulaw: Uint8Array, ownerSeq: number) => {
+    // Drop frames whose turn has been cancelled — guards against late chunks
+    // arriving from an aborted TTS stream and re-flooding the caller.
+    if (ownerSeq !== turnSeq) return;
     if (socket.readyState !== WebSocket.OPEN) return;
-    // Chop into ~20ms frames (160 bytes @ 8kHz μ-law) for smooth playback.
-    const FRAME = 160;
+    const FRAME = 160; // ~20ms @ 8kHz μ-law
     for (let i = 0; i < mulaw.length; i += FRAME) {
       const slice = mulaw.subarray(i, Math.min(i + FRAME, mulaw.length));
       socket.send(provider.formatOutboundAudio(streamSid, bytesToBase64(slice)));
     }
   };
 
+  /** Cancel the in-flight agent turn. Idempotent within a single turn. */
   const cancelAgentTurn = (reason: string) => {
     if (!agentSpeaking) return;
-    console.log(`barge-in / cancel: ${reason}`);
+    console.log(`barge-in: ${reason} (floor=${vad.floor.toFixed(0)})`);
+    turnSeq++;                   // any pending TTS bytes from this turn now stale
     try { llmAbort?.abort(); } catch { /* */ }
     try { ttsAbort?.abort(); } catch { /* */ }
     const clearMsg = provider.formatClear(streamSid);
     if (clearMsg && socket.readyState === WebSocket.OPEN) socket.send(clearMsg);
     agentSpeaking = false;
+    lastCancelAt = Date.now();
+    vad.reset();
+
+    // Preserve interrupted assistant text in history so context survives the
+    // barge — flagged as [interrupted] so the LLM knows the user cut in.
+    if (assistantPartial.trim()) {
+      const partial = assistantPartial.trim();
+      history.push({ role: "assistant", content: `${partial} [interrupted]` });
+      if (callId) {
+        supabase.from("calls").select("metadata").eq("id", callId).maybeSingle()
+          .then(({ data }) =>
+            appendTranscript(supabase, callId, (data?.metadata ?? {}) as Record<string, unknown>, {
+              role: "assistant", text: `${partial} [interrupted]`,
+            }))
+          .then(() => undefined, (e) => console.error("transcript append (interrupted) failed:", e));
+      }
+    }
+    assistantPartial = "";
   };
 
   const speakAndAdvance = async (userText: string) => {
@@ -565,8 +591,11 @@ async function runSession(opts: {
     }
 
     agentSpeaking = true;
+    ttsStartedAt = Date.now();
     llmAbort = new AbortController();
     ttsAbort = new AbortController();
+    assistantPartial = "";
+    const mySeq = turnSeq;       // capture for stale-chunk guard
 
     let assistantBuf = "";
     try {
@@ -577,14 +606,15 @@ async function runSession(opts: {
         history,
         signal: llmAbort.signal,
         onSentence: async (sentence) => {
-          if (!agentSpeaking) return;
+          if (!agentSpeaking || mySeq !== turnSeq) return;
+          assistantPartial += (assistantPartial ? " " : "") + sentence;
           try {
             await streamTts({
               apiKey: elevenKey,
               text: sentence,
               voiceId,
               signal: ttsAbort!.signal,
-              onChunk: (mulaw) => sendAudioToCaller(mulaw),
+              onChunk: (mulaw) => sendAudioToCaller(mulaw, mySeq),
             });
           } catch (e) {
             if ((e as Error).name !== "AbortError") console.error("TTS chunk error:", e);
@@ -596,7 +626,8 @@ async function runSession(opts: {
       if ((e as Error).name !== "AbortError") console.error("LLM stream error:", e);
     }
 
-    if (assistantBuf) {
+    // If we completed without barge-in, persist the full assistant turn.
+    if (mySeq === turnSeq && assistantBuf) {
       history.push({ role: "assistant", content: assistantBuf });
       if (callId) {
         try {
@@ -607,7 +638,10 @@ async function runSession(opts: {
         } catch (e) { console.error("transcript append (assistant) failed:", e); }
       }
     }
-    agentSpeaking = false;
+    if (mySeq === turnSeq) {
+      agentSpeaking = false;
+      assistantPartial = "";
+    }
   };
 
   // ── STT session (with fallback on failure) ───────────────────────────────
