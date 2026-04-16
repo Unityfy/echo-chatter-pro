@@ -583,26 +583,70 @@ async function runSession(opts: {
     agentSpeaking = false;
   };
 
-  // ── STT session ──────────────────────────────────────────────────────────
+  // ── STT session (with fallback on failure) ───────────────────────────────
   let stt: SttHandle | null = null;
+  let sttFailed = false;
+
+  const triggerFallback = async (reason: string) => {
+    if (sttFailed) return;
+    sttFailed = true;
+    console.error(`STT fallback triggered: ${reason}`);
+    if (callId) {
+      try {
+        const { data } = await supabase.from("calls").select("metadata").eq("id", callId).maybeSingle();
+        const meta = (data?.metadata ?? {}) as Record<string, unknown>;
+        await supabase.from("calls").update({
+          status: "fallback",
+          metadata: { ...meta, stt_error: reason, fallback_at: new Date().toISOString() },
+        }).eq("id", callId);
+      } catch (e) { console.error("fallback meta update failed:", e); }
+    }
+    cancelAgentTurn("stt fallback");
+    // Speak a brief handoff line if TTS still works, then close so Exotel's
+    // ExoML <Dial> fallback (configured on the App) can take over the leg.
+    try {
+      const ab = new AbortController();
+      await streamTts({
+        apiKey: elevenKey,
+        text: "One moment, transferring you to a human agent.",
+        voiceId,
+        signal: ab.signal,
+        onChunk: (mulaw) => sendAudioToCaller(mulaw),
+      });
+    } catch { /* */ }
+    try { socket.close(1011, "stt-fallback"); } catch { /* */ }
+  };
+
   try {
     stt = await openSttSession({
       apiKey: elevenKey,
-      language: agent.language && agent.language.toLowerCase().startsWith("en") ? "eng" : null,
+      language: mapLanguageToScribe(agent.language),
+      onPartial: (text) => {
+        // Early barge-in: if user starts producing words while agent is talking,
+        // cut the agent immediately rather than waiting for the final.
+        if (agentSpeaking && text && text.trim().length > 1) {
+          cancelAgentTurn("partial transcript");
+        }
+      },
       onFinal: (text) => {
         const now = Date.now();
         if (now - lastFinalAt < 250) return; // debounce duplicate finals
         lastFinalAt = now;
-        // If the agent was speaking and the user already barged in via VAD,
-        // we already cancelled. If barge happened only on the final transcript,
-        // cancel now.
         cancelAgentTurn("user final transcript");
         speakAndAdvance(text).catch((e) => console.error("turn error:", e));
+      },
+      onError: (err) => {
+        console.error("STT runtime error:", err);
+      },
+      onClose: ({ code, reason, clean }) => {
+        if (!clean && socket.readyState === WebSocket.OPEN && !sttFailed) {
+          triggerFallback(`stt closed code=${code} reason=${reason || "n/a"}`);
+        }
       },
     });
   } catch (e) {
     console.error("STT open failed:", e);
-    socket.close(1011, "stt-unavailable");
+    await triggerFallback(`stt open failed: ${(e as Error).message}`);
     return;
   }
 
