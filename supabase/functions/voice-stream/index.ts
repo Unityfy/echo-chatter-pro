@@ -1,83 +1,221 @@
-// Real-time voice bridge for AI agents.
-// Caller ── (provider WS, μ-law 8kHz) ──> [voice-stream]
-//   STT (ElevenLabs scribe_v2_realtime, PCM 16k)
-//     ──> LLM (Lovable AI Gateway, streaming)
-//       ──> TTS (ElevenLabs streaming, μ-law 8k) ──> Caller
+// ════════════════════════════════════════════════════════════════════════════
+//  voice-stream — provider-agnostic real-time voice bridge for AI agents
+// ════════════════════════════════════════════════════════════════════════════
 //
-// Provider adapters (Exotel today, Twilio/Plivo tomorrow) live in the same
-// file under PROVIDERS — each one knows how to (a) parse the provider's
-// inbound JSON frames into raw 8kHz μ-law audio, and (b) format outbound
-// audio frames the way the provider expects.
+//  Caller ── (provider WS, μ-law 8kHz) ──> [voice-stream]
+//    STT (ElevenLabs scribe_v2_realtime, PCM 16k)
+//      ──> LLM (Lovable AI Gateway, streaming)
+//        ──> TTS (ElevenLabs streaming, μ-law 8k) ──> Caller
 //
-// URL: wss://<ref>.functions.supabase.co/voice-stream?provider=exotel&agent_id=...&call_sid=...
-// Public (verify_jwt = false). Security relies on call_sid + agent ownership
-// scoping; the function only loads agents that already exist server-side.
+//  Architecture (three layers, top → bottom in this file):
+//    1. PROVIDER LAYER   — ProviderAdapter interface + per-provider adapters
+//                          (Exotel implemented; Twilio + Plivo stubs ready).
+//                          Adapters parse/format provider-specific WS frames
+//                          and normalise everything to opaque μ-law 8 kHz.
+//    2. SESSION ENGINE   — Provider-independent core: codecs, adaptive VAD,
+//                          STT/LLM/TTS pipeline, turn-state machine, barge-in,
+//                          transcript logging, fallback handling.
+//    3. ENTRYPOINT       — Thin Deno.serve handler: parse query, load agent,
+//                          pick adapter from registry, upgrade WS, hand off.
+//
+//  URL: wss://<ref>.functions.supabase.co/voice-stream
+//         ?provider=exotel|twilio|plivo
+//         &agent_id=<uuid>
+//         &call_sid=<provider-call-id>
+//
+//  Public (verify_jwt = false). Security relies on the agent already existing
+//  server-side and a valid provider-issued call_sid being present.
+//
+//  Adding a new telephony provider:
+//    1. Implement ProviderAdapter — parseInbound, formatOutboundAudio,
+//       formatClear, optionally formatMark/onLifecycle.
+//    2. Register it in PROVIDERS below.
+//    3. Add a thin webhook function (`<provider>-incoming-call`) that returns
+//       the provider's call-control markup pointing at this WSS URL.
+//    No changes to the SESSION ENGINE should be required.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  ┃ LAYER 1: PROVIDER LAYER
+// ════════════════════════════════════════════════════════════════════════════
 
-type ProviderName = "exotel";
+/** Add new providers here — the rest of the file adapts automatically. */
+type ProviderName = "exotel" | "twilio" | "plivo";
 
 interface ProviderAdapter {
   name: ProviderName;
-  /** Audio format that the provider sends/expects on the wire. */
+  /** Wire-format the provider sends/expects. All currently μ-law 8 kHz —
+   *  if a future provider uses something else, extend the codec layer too. */
   audio: { encoding: "mulaw"; sampleRate: 8000 };
-  /** Parse a single inbound text frame from the provider WS. Returns:
-   *  - { type: "audio", pcm8kMulawB64 } with base64 μ-law payload, or
-   *  - { type: "start", streamSid } when the call begins, or
-   *  - { type: "stop" } when the call ends, or
-   *  - null for keepalives / unknown frames. */
+
+  /** Parse one inbound text frame from the provider WS into a normalised
+   *  event the session engine understands. Return null for keepalives /
+   *  unknown frames. `sessionId` is whatever opaque id the provider uses
+   *  to tag outbound frames (Exotel: stream_sid; Twilio: streamSid). */
   parseInbound(raw: string): InboundEvent | null;
-  /** Wrap a base64 μ-law audio chunk in the provider's outbound frame format. */
-  formatOutboundAudio(streamSid: string, mulawB64: string): string;
-  /** Tell the provider to flush/clear its playout buffer (for barge-in). */
-  formatClear(streamSid: string): string | null;
+
+  /** Wrap a base64 μ-law audio chunk in the provider's outbound frame. */
+  formatOutboundAudio(sessionId: string, mulawB64: string): string;
+
+  /** Tell the provider to flush its playout buffer (used for barge-in).
+   *  Return null if the provider has no equivalent — the engine will still
+   *  abort upstream LLM/TTS. */
+  formatClear(sessionId: string): string | null;
+
+  /** Optional: send a "mark" so the provider notifies us when audio drains.
+   *  Useful for precise turn-end detection. Return null if unsupported. */
+  formatMark?(sessionId: string, markName: string): string | null;
 }
 
 type InboundEvent =
-  | { type: "start"; streamSid: string }
+  | { type: "start"; sessionId: string }
   | { type: "audio"; mulawB64: string }
+  | { type: "mark"; name: string }
   | { type: "stop" };
 
-// ─── Provider adapters ─────────────────────────────────────────────────────
+// ─── Adapters ──────────────────────────────────────────────────────────────
 
-const PROVIDERS: Record<ProviderName, ProviderAdapter> = {
-  // Exotel Voicebot Applet protocol.
-  // Frames: { event: "start"|"media"|"stop", stream_sid, media: { payload } }
-  exotel: {
-    name: "exotel",
-    audio: { encoding: "mulaw", sampleRate: 8000 },
-    parseInbound(raw) {
-      try {
-        const msg = JSON.parse(raw);
-        const ev = msg.event;
-        if (ev === "start") {
-          return { type: "start", streamSid: msg.stream_sid ?? msg.streamSid ?? "" };
-        }
-        if (ev === "media") {
-          const payload = msg.media?.payload;
-          if (typeof payload === "string") return { type: "audio", mulawB64: payload };
-          return null;
-        }
-        if (ev === "stop") return { type: "stop" };
-        return null; // mark, dtmf, etc. — ignored for now
-      } catch {
+/** Exotel Voicebot Applet protocol.
+ *  Frames: { event: "start"|"media"|"stop"|"mark", stream_sid, media: { payload } } */
+const exotelAdapter: ProviderAdapter = {
+  name: "exotel",
+  audio: { encoding: "mulaw", sampleRate: 8000 },
+  parseInbound(raw) {
+    try {
+      const msg = JSON.parse(raw);
+      const ev = msg.event;
+      if (ev === "start") {
+        return { type: "start", sessionId: msg.stream_sid ?? msg.streamSid ?? "" };
+      }
+      if (ev === "media") {
+        const payload = msg.media?.payload;
+        if (typeof payload === "string") return { type: "audio", mulawB64: payload };
         return null;
       }
-    },
-    formatOutboundAudio(streamSid, mulawB64) {
-      return JSON.stringify({
-        event: "media",
-        stream_sid: streamSid,
-        media: { payload: mulawB64 },
-      });
-    },
-    formatClear(streamSid) {
-      return JSON.stringify({ event: "clear", stream_sid: streamSid });
-    },
+      if (ev === "mark") {
+        return { type: "mark", name: msg.mark?.name ?? "" };
+      }
+      if (ev === "stop") return { type: "stop" };
+      return null; // dtmf / connected / unknown — ignored
+    } catch {
+      return null;
+    }
+  },
+  formatOutboundAudio(sessionId, mulawB64) {
+    return JSON.stringify({
+      event: "media",
+      stream_sid: sessionId,
+      media: { payload: mulawB64 },
+    });
+  },
+  formatClear(sessionId) {
+    return JSON.stringify({ event: "clear", stream_sid: sessionId });
+  },
+  formatMark(sessionId, markName) {
+    return JSON.stringify({
+      event: "mark",
+      stream_sid: sessionId,
+      mark: { name: markName },
+    });
   },
 };
+
+/** Twilio Media Streams protocol (stub, ready to use).
+ *  Frames: { event: "connected"|"start"|"media"|"mark"|"stop",
+ *            streamSid, media: { payload, track, timestamp, chunk } }
+ *  Twilio sends audio/x-mulaw;rate=8000 by default — codec matches Exotel. */
+const twilioAdapter: ProviderAdapter = {
+  name: "twilio",
+  audio: { encoding: "mulaw", sampleRate: 8000 },
+  parseInbound(raw) {
+    try {
+      const msg = JSON.parse(raw);
+      const ev = msg.event;
+      if (ev === "start") {
+        return { type: "start", sessionId: msg.start?.streamSid ?? msg.streamSid ?? "" };
+      }
+      if (ev === "media") {
+        // Twilio sends only inbound (caller) audio on the default track.
+        const payload = msg.media?.payload;
+        if (typeof payload === "string") return { type: "audio", mulawB64: payload };
+        return null;
+      }
+      if (ev === "mark") {
+        return { type: "mark", name: msg.mark?.name ?? "" };
+      }
+      if (ev === "stop") return { type: "stop" };
+      return null; // "connected" and others — ignored
+    } catch {
+      return null;
+    }
+  },
+  formatOutboundAudio(sessionId, mulawB64) {
+    return JSON.stringify({
+      event: "media",
+      streamSid: sessionId,
+      media: { payload: mulawB64 },
+    });
+  },
+  formatClear(sessionId) {
+    return JSON.stringify({ event: "clear", streamSid: sessionId });
+  },
+  formatMark(sessionId, markName) {
+    return JSON.stringify({
+      event: "mark",
+      streamSid: sessionId,
+      mark: { name: markName },
+    });
+  },
+};
+
+/** Plivo AudioStream XML protocol (stub, ready to use).
+ *  Frames are very similar to Twilio; same μ-law 8 kHz default codec. */
+const plivoAdapter: ProviderAdapter = {
+  name: "plivo",
+  audio: { encoding: "mulaw", sampleRate: 8000 },
+  parseInbound(raw) {
+    try {
+      const msg = JSON.parse(raw);
+      const ev = msg.event;
+      if (ev === "start") {
+        return { type: "start", sessionId: msg.start?.streamId ?? msg.streamId ?? "" };
+      }
+      if (ev === "media") {
+        const payload = msg.media?.payload;
+        if (typeof payload === "string") return { type: "audio", mulawB64: payload };
+        return null;
+      }
+      if (ev === "stop") return { type: "stop" };
+      return null;
+    } catch {
+      return null;
+    }
+  },
+  formatOutboundAudio(sessionId, mulawB64) {
+    return JSON.stringify({
+      event: "playAudio",
+      streamId: sessionId,
+      media: { contentType: "audio/x-mulaw", sampleRate: 8000, payload: mulawB64 },
+    });
+  },
+  formatClear(sessionId) {
+    return JSON.stringify({ event: "clearAudio", streamId: sessionId });
+  },
+};
+
+const PROVIDERS: Record<ProviderName, ProviderAdapter> = {
+  exotel: exotelAdapter,
+  twilio: twilioAdapter,
+  plivo: plivoAdapter,
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ┃ LAYER 2: SESSION ENGINE (provider-independent)
+// ════════════════════════════════════════════════════════════════════════════
+//  Everything below this line is agnostic of the telephony provider — it
+//  only depends on the ProviderAdapter interface above. To add a provider,
+//  do NOT modify code below this banner; add an adapter in Layer 1 instead.
 
 // ─── Audio codecs (μ-law ⇄ PCM16, 8k ⇄ 16k) ────────────────────────────────
 // Pure-Deno conversions. STT wants PCM16 16kHz; provider speaks μ-law 8kHz.
@@ -518,7 +656,7 @@ async function runSession(opts: {
   const { socket, provider, agent, callId, supabase, lovableKey, elevenKey } = opts;
   const startedAtMs = Date.now();
 
-  let streamSid = "";
+  let sessionId = ""; // opaque provider-issued id (stream_sid / streamSid / streamId)
   const history: { role: "user" | "assistant"; content: string }[] = [];
   const systemPrompt =
     (agent.prompt && agent.prompt.trim()) ||
@@ -545,7 +683,7 @@ async function runSession(opts: {
     const FRAME = 160; // ~20ms @ 8kHz μ-law
     for (let i = 0; i < mulaw.length; i += FRAME) {
       const slice = mulaw.subarray(i, Math.min(i + FRAME, mulaw.length));
-      socket.send(provider.formatOutboundAudio(streamSid, bytesToBase64(slice)));
+      socket.send(provider.formatOutboundAudio(sessionId, bytesToBase64(slice)));
     }
   };
 
@@ -556,7 +694,7 @@ async function runSession(opts: {
     turnSeq++;                   // any pending TTS bytes from this turn now stale
     try { llmAbort?.abort(); } catch { /* */ }
     try { ttsAbort?.abort(); } catch { /* */ }
-    const clearMsg = provider.formatClear(streamSid);
+    const clearMsg = provider.formatClear(sessionId);
     if (clearMsg && socket.readyState === WebSocket.OPEN) socket.send(clearMsg);
     agentSpeaking = false;
     lastCancelAt = Date.now();
@@ -718,31 +856,36 @@ async function runSession(opts: {
 
   // ── Welcome message (agent_first) ────────────────────────────────────────
   if (agent.welcome_mode === "agent_first" && agent.welcome_message?.trim()) {
-    // Wait for streamSid before speaking.
+    // Wait for the provider's "start" event so we have a sessionId to tag
+    // outbound media with. Safety timeout in case "start" never arrives.
     const waitForStream = setInterval(() => {
-      if (streamSid) {
+      if (sessionId) {
         clearInterval(waitForStream);
         speakAndAdvance(agent.welcome_message!).catch(() => { /* */ });
       }
     }, 50);
-    // Safety: clear after 5 s if start never arrived
     setTimeout(() => clearInterval(waitForStream), 5000);
   }
 
-  // ── Inbound audio from provider ──────────────────────────────────────────
+  // ── Inbound frames from provider (normalised by adapter) ─────────────────
   socket.onmessage = (ev) => {
     if (typeof ev.data !== "string") return;
     const event = provider.parseInbound(ev.data);
     if (!event) return;
 
     if (event.type === "start") {
-      streamSid = event.streamSid;
-      console.log(`stream started sid=${streamSid} agent=${agent.id}`);
+      sessionId = event.sessionId;
+      console.log(`[${provider.name}] stream started sid=${sessionId} agent=${agent.id}`);
       return;
     }
     if (event.type === "stop") {
-      console.log("stream stopped");
+      console.log(`[${provider.name}] stream stopped`);
       socket.close(1000, "provider-stop");
+      return;
+    }
+    if (event.type === "mark") {
+      // Provider confirmed our outbound audio drained — useful hook for
+      // providers that need it; no-op for the engine right now.
       return;
     }
     // event.type === "audio"
@@ -787,7 +930,12 @@ async function runSession(opts: {
   socket.onerror = (e) => console.error("client ws error:", e);
 }
 
-// ─── Entrypoint ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  ┃ LAYER 3: ENTRYPOINT
+// ════════════════════════════════════════════════════════════════════════════
+//  Thin Deno.serve handler: validate query, look up the provider adapter and
+//  the agent, upgrade the WebSocket, and hand the socket to the session
+//  engine. No business logic lives here.
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
@@ -800,12 +948,19 @@ Deno.serve(async (req) => {
     return new Response("Expected WebSocket upgrade", { status: 426 });
   }
 
-  const providerName = (url.searchParams.get("provider") ?? "exotel") as ProviderName;
+  const providerNameRaw = url.searchParams.get("provider") ?? "exotel";
   const agentId = url.searchParams.get("agent_id") ?? "";
   const callSid = url.searchParams.get("call_sid") ?? "";
 
-  const provider = PROVIDERS[providerName];
-  if (!provider) return new Response(`unknown provider: ${providerName}`, { status: 400 });
+  // Validate against the registry — guards against typos and is the single
+  // source of truth for which providers are wired up.
+  if (!(providerNameRaw in PROVIDERS)) {
+    return new Response(
+      `unknown provider: ${providerNameRaw}. supported: ${Object.keys(PROVIDERS).join(", ")}`,
+      { status: 400 },
+    );
+  }
+  const provider = PROVIDERS[providerNameRaw as ProviderName];
   if (!agentId) return new Response("missing agent_id", { status: 400 });
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
