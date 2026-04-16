@@ -224,26 +224,53 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
                 ? `••••${a.account_sid.slice(-4)}`
                 : "••••";
               return (
-                <div key={a.id} className="flex items-center justify-between rounded-lg border border-border p-4">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle2 className="h-5 w-5 text-primary" />
-                    <div>
-                      <p className="font-mono text-sm font-medium text-foreground">SID {maskedSid}</p>
-                      <p className="text-xs text-muted-foreground">{a.subdomain}</p>
-                      {(a.api_key_last4 || a.api_token_last4) && (
-                        <p className="font-mono text-xs text-muted-foreground">
-                          {a.api_key_last4 && <>Key ••••{a.api_key_last4} </>}
-                          {a.api_token_last4 && <>· Token ••••{a.api_token_last4}</>}
-                        </p>
-                      )}
+                <div key={a.id} className="space-y-3 rounded-lg border border-border p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle2 className="h-5 w-5 text-primary" />
+                      <div>
+                        <p className="font-mono text-sm font-medium text-foreground">SID {maskedSid}</p>
+                        <p className="text-xs text-muted-foreground">{a.subdomain}</p>
+                        {(a.api_key_last4 || a.api_token_last4) && (
+                          <p className="font-mono text-xs text-muted-foreground">
+                            {a.api_key_last4 && <>Key ••••{a.api_key_last4} </>}
+                            {a.api_token_last4 && <>· Token ••••{a.api_token_last4}</>}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary">Connected</Badge>
+                      <Button variant="ghost" size="sm" onClick={() => handleDisconnect(a.id)}>
+                        <Unplug className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary">Connected</Badge>
-                    <Button variant="ghost" size="sm" onClick={() => handleDisconnect(a.id)}>
-                      <Unplug className="h-4 w-4" />
-                    </Button>
-                  </div>
+
+                  {a.webhook_url && (
+                    <div className="space-y-1.5 rounded-md bg-muted/40 p-3">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">Incoming-call webhook URL</Label>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2"
+                          onClick={() => {
+                            navigator.clipboard.writeText(a.webhook_url!);
+                            toast.success("Webhook URL copied");
+                          }}
+                        >
+                          <Copy className="mr-1 h-3 w-3" /> Copy
+                        </Button>
+                      </div>
+                      <code className="block break-all rounded bg-background p-2 text-xs text-muted-foreground">
+                        {a.webhook_url}
+                      </code>
+                      <p className="text-xs text-muted-foreground">
+                        Paste this into your Exotel App → Voicebot/Passthru URL. The token is unique to this workspace.
+                      </p>
+                    </div>
+                  )}
                 </div>
               );
             })}
