@@ -18,6 +18,8 @@ interface ExotelAccount {
   status: string;
   last_validated_at: string | null;
   created_at: string;
+  api_key_last4?: string | null;
+  api_token_last4?: string | null;
 }
 
 interface ExotelNumber {
@@ -74,15 +76,27 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
   };
 
   const handleConnect = async () => {
-    if (!sid || !apiKey || !apiToken) return toast.error("All fields are required");
+    const sidT = sid.trim();
+    const keyT = apiKey.trim();
+    const tokT = apiToken.trim();
+    const subT = subdomain.trim() || "api.exotel.com";
+
+    // Client-side validation
+    if (!sidT || !keyT || !tokT) return toast.error("All fields are required");
+    if (sidT.length < 3) return toast.error("Account SID looks too short");
+    if (keyT.length < 10) return toast.error("API Key looks too short");
+    if (tokT.length < 10) return toast.error("API Token looks too short");
+    if (!/^[a-zA-Z0-9_-]+$/.test(sidT)) return toast.error("Account SID contains invalid characters");
+    if (!/^[a-zA-Z0-9.-]+$/.test(subT)) return toast.error("Subdomain has invalid format");
+
     setConnecting(true);
     const { data, error } = await supabase.functions.invoke("exotel-connect", {
-      body: { action: "connect", account_sid: sid, api_key: apiKey, api_token: apiToken, subdomain },
+      body: { action: "connect", account_sid: sidT, api_key: keyT, api_token: tokT, subdomain: subT },
     });
     setConnecting(false);
     if (error) return toast.error(error.message);
     if ((data as any)?.error) return toast.error((data as any).error);
-    toast.success("Exotel account connected");
+    toast.success("Exotel account connected and credentials encrypted");
     setSid(""); setApiKey(""); setApiToken("");
     loadStatus();
   };
@@ -167,11 +181,11 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
             </div>
             <div className="space-y-2">
               <Label>API Key</Label>
-              <Input placeholder="API key from Exotel dashboard" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+              <Input type="password" autoComplete="off" placeholder="API key from Exotel dashboard" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>API Token</Label>
-              <Input type="password" placeholder="API token" value={apiToken} onChange={(e) => setApiToken(e.target.value)} />
+              <Input type="password" autoComplete="off" placeholder="API token" value={apiToken} onChange={(e) => setApiToken(e.target.value)} />
             </div>
             <div className="space-y-2">
               <Label>Subdomain</Label>
@@ -183,23 +197,34 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
           </div>
         ) : step === "connected" ? (
           <div className="space-y-4">
-            {accounts.map((a) => (
-              <div key={a.id} className="flex items-center justify-between rounded-lg border border-border p-4">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-primary" />
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{a.account_sid}</p>
-                    <p className="text-xs text-muted-foreground">{a.subdomain}</p>
+            {accounts.map((a) => {
+              const maskedSid = a.account_sid.length > 4
+                ? `••••${a.account_sid.slice(-4)}`
+                : "••••";
+              return (
+                <div key={a.id} className="flex items-center justify-between rounded-lg border border-border p-4">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-primary" />
+                    <div>
+                      <p className="font-mono text-sm font-medium text-foreground">SID {maskedSid}</p>
+                      <p className="text-xs text-muted-foreground">{a.subdomain}</p>
+                      {(a.api_key_last4 || a.api_token_last4) && (
+                        <p className="font-mono text-xs text-muted-foreground">
+                          {a.api_key_last4 && <>Key ••••{a.api_key_last4} </>}
+                          {a.api_token_last4 && <>· Token ••••{a.api_token_last4}</>}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary">Connected</Badge>
+                    <Button variant="ghost" size="sm" onClick={() => handleDisconnect(a.id)}>
+                      <Unplug className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary">Connected</Badge>
-                  <Button variant="ghost" size="sm" onClick={() => handleDisconnect(a.id)}>
-                    <Unplug className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-2">
