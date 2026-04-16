@@ -227,6 +227,69 @@ export type Database = {
           },
         ]
       }
+      calls: {
+        Row: {
+          agent_id: string | null
+          answered_at: string | null
+          call_sid: string | null
+          created_at: string
+          direction: string
+          duration_seconds: number | null
+          ended_at: string | null
+          from_number: string | null
+          id: string
+          metadata: Json
+          phone_number_id: string | null
+          provider: string
+          recording_url: string | null
+          started_at: string
+          status: string
+          team_id: string
+          to_number: string | null
+          updated_at: string
+        }
+        Insert: {
+          agent_id?: string | null
+          answered_at?: string | null
+          call_sid?: string | null
+          created_at?: string
+          direction?: string
+          duration_seconds?: number | null
+          ended_at?: string | null
+          from_number?: string | null
+          id?: string
+          metadata?: Json
+          phone_number_id?: string | null
+          provider?: string
+          recording_url?: string | null
+          started_at?: string
+          status?: string
+          team_id: string
+          to_number?: string | null
+          updated_at?: string
+        }
+        Update: {
+          agent_id?: string | null
+          answered_at?: string | null
+          call_sid?: string | null
+          created_at?: string
+          direction?: string
+          duration_seconds?: number | null
+          ended_at?: string | null
+          from_number?: string | null
+          id?: string
+          metadata?: Json
+          phone_number_id?: string | null
+          provider?: string
+          recording_url?: string | null
+          started_at?: string
+          status?: string
+          team_id?: string
+          to_number?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       exotel_accounts: {
         Row: {
           account_sid: string
@@ -240,6 +303,7 @@ export type Database = {
           subdomain: string
           team_id: string
           updated_at: string
+          webhook_token: string
         }
         Insert: {
           account_sid: string
@@ -253,6 +317,7 @@ export type Database = {
           subdomain?: string
           team_id: string
           updated_at?: string
+          webhook_token?: string
         }
         Update: {
           account_sid?: string
@@ -266,6 +331,7 @@ export type Database = {
           subdomain?: string
           team_id?: string
           updated_at?: string
+          webhook_token?: string
         }
         Relationships: [
           {
@@ -561,6 +627,7 @@ export type Database = {
         Row: {
           created_at: string
           created_by: string
+          fallback_number: string | null
           id: string
           logo_url: string | null
           name: string
@@ -570,6 +637,7 @@ export type Database = {
         Insert: {
           created_at?: string
           created_by: string
+          fallback_number?: string | null
           id?: string
           logo_url?: string | null
           name: string
@@ -579,6 +647,7 @@ export type Database = {
         Update: {
           created_at?: string
           created_by?: string
+          fallback_number?: string | null
           id?: string
           logo_url?: string | null
           name?: string
