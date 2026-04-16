@@ -138,24 +138,8 @@ export default function PhoneNumbers() {
     load();
   };
 
-  const handleConnect = async () => {
-    if (!phoneInput.trim()) return toast.error("Phone number required");
-    const tid = await resolveTeamId();
-    if (!tid) return toast.error("No workspace found");
-    const { error } = await db.from("phone_numbers").insert({
-      team_id: tid,
-      phone_number: phoneInput.trim(),
-      provider: "exotel",
-      provider_number_id: providerIdInput.trim() || null,
-      status: "active",
-    });
-    if (error) return toast.error(error.message);
-    toast.success("Number connected");
-    setConnectOpen(false);
-    setPhoneInput("");
-    setProviderIdInput("");
-    load();
-  };
+  // Manual "Connect Existing" flow removed — setup is now handled in Integrations,
+  // and numbers come in via Buy or Import from Exotel.
 
   const handleAssign = async () => {
     if (!activeNumber) return;
@@ -206,52 +190,15 @@ export default function PhoneNumbers() {
         </div>
         {canManage && (
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setExotelConnectOpen(true)}>
+            <Button
+              variant="outline"
+              onClick={() => setExotelConnectOpen(true)}
+              disabled={exotelConnected === false}
+              title={exotelConnected === false ? "Connect Exotel in Integrations first" : undefined}
+            >
               <Plug className="mr-2 h-4 w-4" />
               Import from Exotel
             </Button>
-            <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline">
-                  <LinkIcon className="mr-2 h-4 w-4" />
-                  Connect Existing
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Connect existing number</DialogTitle>
-                  <DialogDescription>
-                    Link a number you already own with your Exotel account.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="phone">Phone number</Label>
-                    <Input
-                      id="phone"
-                      placeholder="+919876543210"
-                      value={phoneInput}
-                      onChange={(e) => setPhoneInput(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="providerId">Provider number ID (optional)</Label>
-                    <Input
-                      id="providerId"
-                      placeholder="exotel_sid_..."
-                      value={providerIdInput}
-                      onChange={(e) => setProviderIdInput(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <DialogClose asChild>
-                    <Button variant="outline">Cancel</Button>
-                  </DialogClose>
-                  <Button onClick={handleConnect}>Connect</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
 
             <Dialog
               open={buyOpen}
