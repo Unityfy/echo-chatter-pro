@@ -4,3 +4,8 @@ project_id = "trsccroicslqgsppbjzp"
 # Secured via per-workspace token in the URL + optional IP allowlist.
 [functions.exotel-incoming-call]
 verify_jwt = false
+
+# Public WS endpoint — called by the telephony provider (Exotel today).
+# Authenticated by call_sid lookup + agent ownership scoping in code.
+[functions.voice-stream]
+verify_jwt = false
