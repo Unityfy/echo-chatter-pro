@@ -849,31 +849,36 @@ async function runSession(opts: {
 
   // ── Welcome message (agent_first) ────────────────────────────────────────
   if (agent.welcome_mode === "agent_first" && agent.welcome_message?.trim()) {
-    // Wait for streamSid before speaking.
+    // Wait for the provider's "start" event so we have a sessionId to tag
+    // outbound media with. Safety timeout in case "start" never arrives.
     const waitForStream = setInterval(() => {
-      if (streamSid) {
+      if (sessionId) {
         clearInterval(waitForStream);
         speakAndAdvance(agent.welcome_message!).catch(() => { /* */ });
       }
     }, 50);
-    // Safety: clear after 5 s if start never arrived
     setTimeout(() => clearInterval(waitForStream), 5000);
   }
 
-  // ── Inbound audio from provider ──────────────────────────────────────────
+  // ── Inbound frames from provider (normalised by adapter) ─────────────────
   socket.onmessage = (ev) => {
     if (typeof ev.data !== "string") return;
     const event = provider.parseInbound(ev.data);
     if (!event) return;
 
     if (event.type === "start") {
-      streamSid = event.streamSid;
-      console.log(`stream started sid=${streamSid} agent=${agent.id}`);
+      sessionId = event.sessionId;
+      console.log(`[${provider.name}] stream started sid=${sessionId} agent=${agent.id}`);
       return;
     }
     if (event.type === "stop") {
-      console.log("stream stopped");
+      console.log(`[${provider.name}] stream stopped`);
       socket.close(1000, "provider-stop");
+      return;
+    }
+    if (event.type === "mark") {
+      // Provider confirmed our outbound audio drained — useful hook for
+      // providers that need it; no-op for the engine right now.
       return;
     }
     // event.type === "audio"
