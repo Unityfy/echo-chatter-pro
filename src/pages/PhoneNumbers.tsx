@@ -237,50 +237,109 @@ export default function PhoneNumbers() {
               </DialogContent>
             </Dialog>
 
-            <Dialog open={buyOpen} onOpenChange={setBuyOpen}>
+            <Dialog
+              open={buyOpen}
+              onOpenChange={(o) => {
+                setBuyOpen(o);
+                if (!o) setAvailable([]);
+              }}
+            >
               <DialogTrigger asChild>
                 <Button>
                   <ShoppingCart className="mr-2 h-4 w-4" />
                   Buy Number
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Buy a new number</DialogTitle>
                   <DialogDescription>
-                    Provision a new Exotel number for your workspace.
+                    Search Exotel inventory and purchase a number for your workspace.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="provider">Provider</Label>
-                    <Select defaultValue="exotel" disabled>
-                      <SelectTrigger id="provider">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="exotel">Exotel</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="country">Country</Label>
+                      <Select value={buyCountry} onValueChange={setBuyCountry}>
+                        <SelectTrigger id="country">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-popover">
+                          <SelectItem value="IN">🇮🇳 India</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ntype">Number type</Label>
+                      <Select
+                        value={buyType}
+                        onValueChange={(v) => setBuyType(v as "virtual" | "toll_free")}
+                      >
+                        <SelectTrigger id="ntype">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-popover">
+                          <SelectItem value="virtual">Virtual (Local)</SelectItem>
+                          <SelectItem value="toll_free">Toll-Free</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="area">Area code (optional)</Label>
-                    <Input
-                      id="area"
-                      placeholder="e.g. 80"
-                      value={areaCode}
-                      onChange={(e) => setAreaCode(e.target.value)}
-                    />
-                  </div>
+
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleSearch}
+                    disabled={searching}
+                  >
+                    {searching ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Search className="mr-2 h-4 w-4" />
+                    )}
+                    Search available numbers
+                  </Button>
+
+                  {available.length > 0 && (
+                    <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-border p-2">
+                      {available.map((n) => (
+                        <div
+                          key={n.phone_number}
+                          className="flex items-center justify-between rounded-md p-2 hover:bg-muted/50"
+                        >
+                          <div>
+                            <p className="font-mono text-sm text-foreground">{n.phone_number}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {n.monthly_rental ?? "—"}/mo
+                              {n.setup_fee ? ` · setup ${n.setup_fee}` : ""}
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={() => handlePurchase(n.phone_number)}
+                            disabled={purchasing === n.phone_number}
+                          >
+                            {purchasing === n.phone_number ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              "Buy"
+                            )}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <p className="text-xs text-muted-foreground">
-                    A number will be reserved and billed to your workspace.
+                    Exotel may require KYC/manual approval. Newly purchased numbers may show
+                    as <span className="font-medium">pending</span> until activated.
                   </p>
                 </div>
                 <DialogFooter>
                   <DialogClose asChild>
-                    <Button variant="outline">Cancel</Button>
+                    <Button variant="outline">Close</Button>
                   </DialogClose>
-                  <Button onClick={handleBuy}>Confirm purchase</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
