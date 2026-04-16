@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Phone, Plus, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart } from "lucide-react";
+import { Phone, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart, Search, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -57,8 +57,16 @@ export default function PhoneNumbers() {
 
   const [phoneInput, setPhoneInput] = useState("");
   const [providerIdInput, setProviderIdInput] = useState("");
-  const [areaCode, setAreaCode] = useState("");
   const [assignAgentId, setAssignAgentId] = useState<string>("none");
+
+  // Buy flow
+  const [buyCountry, setBuyCountry] = useState("IN");
+  const [buyType, setBuyType] = useState<"virtual" | "toll_free">("virtual");
+  const [searching, setSearching] = useState(false);
+  const [purchasing, setPurchasing] = useState<string | null>(null);
+  const [available, setAvailable] = useState<
+    { phone_number: string; type: string; monthly_rental?: string; setup_fee?: string }[]
+  >([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,22 +95,34 @@ export default function PhoneNumbers() {
     return data?.team_id ?? null;
   };
 
-  const handleBuy = async () => {
-    const tid = await resolveTeamId();
-    if (!tid) return toast.error("No workspace found");
-    // Simulated provisioning — generate a placeholder Indian-style number
-    const generated = `+91${Math.floor(7000000000 + Math.random() * 999999999)}`;
-    const { error } = await db.from("phone_numbers").insert({
-      team_id: tid,
-      phone_number: generated,
-      provider: "exotel",
-      provider_number_id: `exo_${Date.now()}`,
-      status: "active",
+  const handleSearch = async () => {
+    setSearching(true);
+    setAvailable([]);
+    const { data, error } = await supabase.functions.invoke("exotel-numbers", {
+      body: { action: "list_available", country: buyCountry, number_type: buyType },
     });
+    setSearching(false);
     if (error) return toast.error(error.message);
-    toast.success(`Number ${generated} provisioned`);
+    const list = (data as any)?.numbers ?? [];
+    if (list.length === 0) return toast.info("No numbers available right now");
+    setAvailable(list);
+  };
+
+  const handlePurchase = async (phone_number: string) => {
+    setPurchasing(phone_number);
+    const { data, error } = await supabase.functions.invoke("exotel-numbers", {
+      body: { action: "purchase", phone_number, number_type: buyType },
+    });
+    setPurchasing(null);
+    if (error) return toast.error(error.message);
+    const status = (data as any)?.status;
+    toast.success(
+      status === "active"
+        ? `${phone_number} purchased and active`
+        : `${phone_number} reserved — pending Exotel approval`,
+    );
     setBuyOpen(false);
-    setAreaCode("");
+    setAvailable([]);
     load();
   };
 
@@ -217,50 +237,109 @@ export default function PhoneNumbers() {
               </DialogContent>
             </Dialog>
 
-            <Dialog open={buyOpen} onOpenChange={setBuyOpen}>
+            <Dialog
+              open={buyOpen}
+              onOpenChange={(o) => {
+                setBuyOpen(o);
+                if (!o) setAvailable([]);
+              }}
+            >
               <DialogTrigger asChild>
                 <Button>
                   <ShoppingCart className="mr-2 h-4 w-4" />
                   Buy Number
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="sm:max-w-lg">
                 <DialogHeader>
                   <DialogTitle>Buy a new number</DialogTitle>
                   <DialogDescription>
-                    Provision a new Exotel number for your workspace.
+                    Search Exotel inventory and purchase a number for your workspace.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="provider">Provider</Label>
-                    <Select defaultValue="exotel" disabled>
-                      <SelectTrigger id="provider">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="exotel">Exotel</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="country">Country</Label>
+                      <Select value={buyCountry} onValueChange={setBuyCountry}>
+                        <SelectTrigger id="country">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-popover">
+                          <SelectItem value="IN">🇮🇳 India</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ntype">Number type</Label>
+                      <Select
+                        value={buyType}
+                        onValueChange={(v) => setBuyType(v as "virtual" | "toll_free")}
+                      >
+                        <SelectTrigger id="ntype">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-popover">
+                          <SelectItem value="virtual">Virtual (Local)</SelectItem>
+                          <SelectItem value="toll_free">Toll-Free</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="area">Area code (optional)</Label>
-                    <Input
-                      id="area"
-                      placeholder="e.g. 80"
-                      value={areaCode}
-                      onChange={(e) => setAreaCode(e.target.value)}
-                    />
-                  </div>
+
+                  <Button
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleSearch}
+                    disabled={searching}
+                  >
+                    {searching ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Search className="mr-2 h-4 w-4" />
+                    )}
+                    Search available numbers
+                  </Button>
+
+                  {available.length > 0 && (
+                    <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-border p-2">
+                      {available.map((n) => (
+                        <div
+                          key={n.phone_number}
+                          className="flex items-center justify-between rounded-md p-2 hover:bg-muted/50"
+                        >
+                          <div>
+                            <p className="font-mono text-sm text-foreground">{n.phone_number}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {n.monthly_rental ?? "—"}/mo
+                              {n.setup_fee ? ` · setup ${n.setup_fee}` : ""}
+                            </p>
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={() => handlePurchase(n.phone_number)}
+                            disabled={purchasing === n.phone_number}
+                          >
+                            {purchasing === n.phone_number ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              "Buy"
+                            )}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <p className="text-xs text-muted-foreground">
-                    A number will be reserved and billed to your workspace.
+                    Exotel may require KYC/manual approval. Newly purchased numbers may show
+                    as <span className="font-medium">pending</span> until activated.
                   </p>
                 </div>
                 <DialogFooter>
                   <DialogClose asChild>
-                    <Button variant="outline">Cancel</Button>
+                    <Button variant="outline">Close</Button>
                   </DialogClose>
-                  <Button onClick={handleBuy}>Confirm purchase</Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
