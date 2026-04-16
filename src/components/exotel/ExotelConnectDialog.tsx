@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, Plug, Unplug } from "lucide-react";
+import { Loader2, CheckCircle2, Plug, Unplug, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
@@ -27,6 +27,7 @@ interface ExotelNumber {
   friendly_name: string;
   status: string;
   sid: string;
+  already_imported?: boolean;
 }
 
 interface Props {
@@ -101,10 +102,10 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     loadStatus();
   };
 
-  const handleFetchNumbers = async () => {
+  const handleFetchNumbers = async (silent = false) => {
     if (!activeAccountId) return;
     setFetchingNumbers(true);
-    setNumbers([]);
+    if (!silent) setNumbers([]);
     setSelected(new Set());
     const { data, error } = await supabase.functions.invoke("exotel-connect", {
       body: { action: "list_numbers", account_id: activeAccountId },
@@ -112,11 +113,19 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     setFetchingNumbers(false);
     if (error) return toast.error(error.message);
     if ((data as any)?.error) return toast.error((data as any).error);
-    const nums = (data as any)?.numbers ?? [];
-    if (nums.length === 0) return toast.info("No numbers found in your Exotel account");
+    const nums = ((data as any)?.numbers ?? []) as ExotelNumber[];
+    if (nums.length === 0) {
+      setNumbers([]);
+      return toast.info("No numbers found in your Exotel account");
+    }
     setNumbers(nums);
     setStep("numbers");
+    if (silent) toast.success("Number list synced");
   };
+
+  const importableNumbers = numbers.filter((n) => !n.already_imported);
+  const allImportableSelected =
+    importableNumbers.length > 0 && importableNumbers.every((n) => selected.has(n.phone_number));
 
   const toggleNumber = (phone: string) => {
     setSelected((prev) => {
@@ -126,11 +135,19 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     });
   };
 
+  const toggleSelectAll = () => {
+    if (allImportableSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(importableNumbers.map((n) => n.phone_number)));
+    }
+  };
+
   const handleImport = async () => {
     if (selected.size === 0) return toast.error("Select at least one number");
     setImporting(true);
     const toImport = numbers
-      .filter((n) => selected.has(n.phone_number))
+      .filter((n) => selected.has(n.phone_number) && !n.already_imported)
       .map((n) => ({ phone_number: n.phone_number, sid: n.sid }));
     const { data, error } = await supabase.functions.invoke("exotel-connect", {
       body: { action: "import_numbers", account_id: activeAccountId, numbers: toImport },
@@ -138,7 +155,11 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     setImporting(false);
     if (error) return toast.error(error.message);
     if ((data as any)?.error) return toast.error((data as any).error);
-    toast.success(`${selected.size} number(s) imported`);
+    const importedCount = ((data as any)?.imported ?? []).length;
+    const skipped = (data as any)?.skipped ?? 0;
+    toast.success(
+      `${importedCount} number(s) imported${skipped > 0 ? ` · ${skipped} skipped (already imported)` : ""}`,
+    );
     onOpenChange(false);
     onImported?.();
   };
