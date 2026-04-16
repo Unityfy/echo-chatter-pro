@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
-import { Phone, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart, Search, Loader2 } from "lucide-react";
+import { Phone, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart, Search, Loader2, Plug } from "lucide-react";
+import ExotelConnectDialog from "@/components/exotel/ExotelConnectDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +53,7 @@ export default function PhoneNumbers() {
 
   const [buyOpen, setBuyOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [exotelConnectOpen, setExotelConnectOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [activeNumber, setActiveNumber] = useState<PhoneNumber | null>(null);
 
@@ -194,6 +196,10 @@ export default function PhoneNumbers() {
         </div>
         {canManage && (
           <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setExotelConnectOpen(true)}>
+              <Plug className="mr-2 h-4 w-4" />
+              Import from Exotel
+            </Button>
             <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline">
@@ -449,6 +455,8 @@ export default function PhoneNumbers() {
           )}
         </CardContent>
       </Card>
+
+      <ExotelConnectDialog open={exotelConnectOpen} onOpenChange={setExotelConnectOpen} onImported={load} />
 
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
         <DialogContent>
