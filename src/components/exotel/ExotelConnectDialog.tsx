@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, Plug, Unplug } from "lucide-react";
+import { Loader2, CheckCircle2, Plug, Unplug, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
@@ -27,6 +27,7 @@ interface ExotelNumber {
   friendly_name: string;
   status: string;
   sid: string;
+  already_imported?: boolean;
 }
 
 interface Props {
@@ -101,10 +102,10 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     loadStatus();
   };
 
-  const handleFetchNumbers = async () => {
+  const handleFetchNumbers = async (silent = false) => {
     if (!activeAccountId) return;
     setFetchingNumbers(true);
-    setNumbers([]);
+    if (!silent) setNumbers([]);
     setSelected(new Set());
     const { data, error } = await supabase.functions.invoke("exotel-connect", {
       body: { action: "list_numbers", account_id: activeAccountId },
@@ -112,11 +113,19 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     setFetchingNumbers(false);
     if (error) return toast.error(error.message);
     if ((data as any)?.error) return toast.error((data as any).error);
-    const nums = (data as any)?.numbers ?? [];
-    if (nums.length === 0) return toast.info("No numbers found in your Exotel account");
+    const nums = ((data as any)?.numbers ?? []) as ExotelNumber[];
+    if (nums.length === 0) {
+      setNumbers([]);
+      return toast.info("No numbers found in your Exotel account");
+    }
     setNumbers(nums);
     setStep("numbers");
+    if (silent) toast.success("Number list synced");
   };
+
+  const importableNumbers = numbers.filter((n) => !n.already_imported);
+  const allImportableSelected =
+    importableNumbers.length > 0 && importableNumbers.every((n) => selected.has(n.phone_number));
 
   const toggleNumber = (phone: string) => {
     setSelected((prev) => {
@@ -126,11 +135,19 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     });
   };
 
+  const toggleSelectAll = () => {
+    if (allImportableSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(importableNumbers.map((n) => n.phone_number)));
+    }
+  };
+
   const handleImport = async () => {
     if (selected.size === 0) return toast.error("Select at least one number");
     setImporting(true);
     const toImport = numbers
-      .filter((n) => selected.has(n.phone_number))
+      .filter((n) => selected.has(n.phone_number) && !n.already_imported)
       .map((n) => ({ phone_number: n.phone_number, sid: n.sid }));
     const { data, error } = await supabase.functions.invoke("exotel-connect", {
       body: { action: "import_numbers", account_id: activeAccountId, numbers: toImport },
@@ -138,7 +155,11 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
     setImporting(false);
     if (error) return toast.error(error.message);
     if ((data as any)?.error) return toast.error((data as any).error);
-    toast.success(`${selected.size} number(s) imported`);
+    const importedCount = ((data as any)?.imported ?? []).length;
+    const skipped = (data as any)?.skipped ?? 0;
+    toast.success(
+      `${importedCount} number(s) imported${skipped > 0 ? ` · ${skipped} skipped (already imported)` : ""}`,
+    );
     onOpenChange(false);
     onImported?.();
   };
@@ -227,25 +248,66 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
             })}
           </div>
         ) : (
-          <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-2">
-            {numbers.map((n) => (
-              <label
-                key={n.phone_number}
-                className="flex cursor-pointer items-center gap-3 rounded-md p-2 hover:bg-muted/50"
-              >
+          <div className="space-y-2">
+            <div className="flex items-center justify-between rounded-md border border-border p-2">
+              <label className="flex cursor-pointer items-center gap-2">
                 <Checkbox
-                  checked={selected.has(n.phone_number)}
-                  onCheckedChange={() => toggleNumber(n.phone_number)}
+                  checked={allImportableSelected}
+                  disabled={importableNumbers.length === 0}
+                  onCheckedChange={toggleSelectAll}
                 />
-                <div className="flex-1">
-                  <p className="font-mono text-sm text-foreground">{n.phone_number}</p>
-                  {n.friendly_name && (
-                    <p className="text-xs text-muted-foreground">{n.friendly_name}</p>
-                  )}
-                </div>
-                <Badge variant="outline" className="text-xs capitalize">{n.status}</Badge>
+                <span className="text-sm text-foreground">
+                  Select all
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    ({importableNumbers.length} importable · {numbers.length - importableNumbers.length} already imported)
+                  </span>
+                </span>
               </label>
-            ))}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => handleFetchNumbers(true)}
+                disabled={fetchingNumbers}
+              >
+                {fetchingNumbers ? (
+                  <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-3 w-3" />
+                )}
+                Sync
+              </Button>
+            </div>
+
+            <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+              {numbers.map((n) => {
+                const isImported = !!n.already_imported;
+                return (
+                  <label
+                    key={n.phone_number}
+                    className={`flex items-center gap-3 rounded-md p-2 ${
+                      isImported ? "opacity-60" : "cursor-pointer hover:bg-muted/50"
+                    }`}
+                  >
+                    <Checkbox
+                      checked={selected.has(n.phone_number)}
+                      disabled={isImported}
+                      onCheckedChange={() => !isImported && toggleNumber(n.phone_number)}
+                    />
+                    <div className="flex-1">
+                      <p className="font-mono text-sm text-foreground">{n.phone_number}</p>
+                      {n.friendly_name && (
+                        <p className="text-xs text-muted-foreground">{n.friendly_name}</p>
+                      )}
+                    </div>
+                    {isImported ? (
+                      <Badge variant="secondary" className="text-xs">Imported</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-xs">Not imported</Badge>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -265,7 +327,7 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
                 <Plug className="mr-2 h-4 w-4" />
                 Add Another
               </Button>
-              <Button onClick={handleFetchNumbers} disabled={fetchingNumbers}>
+              <Button onClick={() => handleFetchNumbers(false)} disabled={fetchingNumbers}>
                 {fetchingNumbers && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Fetch Numbers
               </Button>
