@@ -151,10 +151,10 @@ function int16ToBase64(pcm: Int16Array): string {
   return bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
 }
 
-// ─── Lightweight VAD for barge-in detection ────────────────────────────────
-// We don't run STT during agent speech (too expensive); instead we watch
-// inbound RMS energy on caller audio and trigger a barge-in if it stays
-// above threshold for ~150 ms.
+// ─── Adaptive VAD for barge-in detection ───────────────────────────────────
+// Hybrid VAD: continuous noise-floor calibration + adaptive threshold +
+// sustained-energy gating. Telephony lines vary widely (background hum on
+// Indian mobile networks especially), so a fixed RMS cutoff misfires.
 
 function rms(pcm: Int16Array): number {
   let acc = 0;
@@ -162,8 +162,35 @@ function rms(pcm: Int16Array): number {
   return Math.sqrt(acc / pcm.length);
 }
 
-const BARGE_RMS_THRESHOLD = 1200; // empirical for telephony μ-law
-const BARGE_SUSTAINED_MS = 150;
+// Tuning constants — calibrated for 8 kHz μ-law telephony.
+const BARGE_SUSTAINED_MS = 120;              // user must speak ≥120 ms to interrupt
+const BARGE_MIN_RATIO = 3.5;                 // energy ≥ 3.5× current noise floor
+const BARGE_MIN_ABSOLUTE = 800;              // absolute floor so silence never triggers
+const BARGE_COOLDOWN_MS = 400;               // ignore barges shortly after a cancel
+const BARGE_GRACE_AFTER_TTS_START_MS = 250;  // ignore first 250ms of agent speech
+const NOISE_EMA_ALPHA = 0.05;                // slow EMA — adapts in ~1-2 s of silence
+
+class AdaptiveVad {
+  private noiseFloor = 200;
+  private bargeStartedAt: number | null = null;
+
+  observeQuiet(energy: number) {
+    this.noiseFloor = (1 - NOISE_EMA_ALPHA) * this.noiseFloor + NOISE_EMA_ALPHA * energy;
+  }
+
+  shouldBarge(energy: number, now: number): boolean {
+    const dynamicThreshold = Math.max(BARGE_MIN_ABSOLUTE, this.noiseFloor * BARGE_MIN_RATIO);
+    if (energy >= dynamicThreshold) {
+      if (this.bargeStartedAt === null) this.bargeStartedAt = now;
+      return now - this.bargeStartedAt >= BARGE_SUSTAINED_MS;
+    }
+    this.bargeStartedAt = null;
+    return false;
+  }
+
+  reset() { this.bargeStartedAt = null; }
+  get floor() { return this.noiseFloor; }
+}
 
 // ─── Agent loader ──────────────────────────────────────────────────────────
 
