@@ -18,6 +18,8 @@ interface ExotelAccount {
   status: string;
   last_validated_at: string | null;
   created_at: string;
+  api_key_last4?: string | null;
+  api_token_last4?: string | null;
 }
 
 interface ExotelNumber {
@@ -74,15 +76,27 @@ export default function ExotelConnectDialog({ open, onOpenChange, onImported }: 
   };
 
   const handleConnect = async () => {
-    if (!sid || !apiKey || !apiToken) return toast.error("All fields are required");
+    const sidT = sid.trim();
+    const keyT = apiKey.trim();
+    const tokT = apiToken.trim();
+    const subT = subdomain.trim() || "api.exotel.com";
+
+    // Client-side validation
+    if (!sidT || !keyT || !tokT) return toast.error("All fields are required");
+    if (sidT.length < 3) return toast.error("Account SID looks too short");
+    if (keyT.length < 10) return toast.error("API Key looks too short");
+    if (tokT.length < 10) return toast.error("API Token looks too short");
+    if (!/^[a-zA-Z0-9_-]+$/.test(sidT)) return toast.error("Account SID contains invalid characters");
+    if (!/^[a-zA-Z0-9.-]+$/.test(subT)) return toast.error("Subdomain has invalid format");
+
     setConnecting(true);
     const { data, error } = await supabase.functions.invoke("exotel-connect", {
-      body: { action: "connect", account_sid: sid, api_key: apiKey, api_token: apiToken, subdomain },
+      body: { action: "connect", account_sid: sidT, api_key: keyT, api_token: tokT, subdomain: subT },
     });
     setConnecting(false);
     if (error) return toast.error(error.message);
     if ((data as any)?.error) return toast.error((data as any).error);
-    toast.success("Exotel account connected");
+    toast.success("Exotel account connected and credentials encrypted");
     setSid(""); setApiKey(""); setApiToken("");
     loadStatus();
   };
