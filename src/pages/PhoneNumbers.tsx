@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
-import { Phone, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart, Search, Loader2, Plug } from "lucide-react";
+import { Link as RouterLink } from "react-router-dom";
+import { Phone, MoreHorizontal, UserPlus, Trash2, ShoppingCart, Search, Loader2, Plug, AlertTriangle } from "lucide-react";
 import ExotelConnectDialog from "@/components/exotel/ExotelConnectDialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -52,13 +54,11 @@ export default function PhoneNumbers() {
   const [loading, setLoading] = useState(true);
 
   const [buyOpen, setBuyOpen] = useState(false);
-  const [connectOpen, setConnectOpen] = useState(false);
   const [exotelConnectOpen, setExotelConnectOpen] = useState(false);
+  const [exotelConnected, setExotelConnected] = useState<boolean | null>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [activeNumber, setActiveNumber] = useState<PhoneNumber | null>(null);
 
-  const [phoneInput, setPhoneInput] = useState("");
-  const [providerIdInput, setProviderIdInput] = useState("");
   const [assignAgentId, setAssignAgentId] = useState<string>("none");
 
   // Buy flow
@@ -69,6 +69,13 @@ export default function PhoneNumbers() {
   const [available, setAvailable] = useState<
     { phone_number: string; type: string; monthly_rental?: string; setup_fee?: string }[]
   >([]);
+
+  const checkExotelStatus = useCallback(async () => {
+    const { data } = await supabase.functions.invoke("exotel-connect", {
+      body: { action: "status" },
+    });
+    setExotelConnected(((data as any)?.accounts ?? []).length > 0);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,19 +90,10 @@ export default function PhoneNumbers() {
 
   useEffect(() => {
     load();
-  }, [load]);
+    checkExotelStatus();
+  }, [load, checkExotelStatus]);
 
-  const resolveTeamId = async (): Promise<string | null> => {
-    if (teamId) return teamId;
-    if (!user) return null;
-    const { data } = await supabase
-      .from("team_members")
-      .select("team_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-    return data?.team_id ?? null;
-  };
+  // (resolveTeamId removed — no longer needed since manual connect was removed)
 
   const handleSearch = async () => {
     setSearching(true);
@@ -128,24 +126,8 @@ export default function PhoneNumbers() {
     load();
   };
 
-  const handleConnect = async () => {
-    if (!phoneInput.trim()) return toast.error("Phone number required");
-    const tid = await resolveTeamId();
-    if (!tid) return toast.error("No workspace found");
-    const { error } = await db.from("phone_numbers").insert({
-      team_id: tid,
-      phone_number: phoneInput.trim(),
-      provider: "exotel",
-      provider_number_id: providerIdInput.trim() || null,
-      status: "active",
-    });
-    if (error) return toast.error(error.message);
-    toast.success("Number connected");
-    setConnectOpen(false);
-    setPhoneInput("");
-    setProviderIdInput("");
-    load();
-  };
+  // Manual "Connect Existing" flow removed — setup is now handled in Integrations,
+  // and numbers come in via Buy or Import from Exotel.
 
   const handleAssign = async () => {
     if (!activeNumber) return;
@@ -196,52 +178,15 @@ export default function PhoneNumbers() {
         </div>
         {canManage && (
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => setExotelConnectOpen(true)}>
+            <Button
+              variant="outline"
+              onClick={() => setExotelConnectOpen(true)}
+              disabled={exotelConnected === false}
+              title={exotelConnected === false ? "Connect Exotel in Integrations first" : undefined}
+            >
               <Plug className="mr-2 h-4 w-4" />
               Import from Exotel
             </Button>
-            <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline">
-                  <LinkIcon className="mr-2 h-4 w-4" />
-                  Connect Existing
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Connect existing number</DialogTitle>
-                  <DialogDescription>
-                    Link a number you already own with your Exotel account.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="phone">Phone number</Label>
-                    <Input
-                      id="phone"
-                      placeholder="+919876543210"
-                      value={phoneInput}
-                      onChange={(e) => setPhoneInput(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="providerId">Provider number ID (optional)</Label>
-                    <Input
-                      id="providerId"
-                      placeholder="exotel_sid_..."
-                      value={providerIdInput}
-                      onChange={(e) => setProviderIdInput(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <DialogClose asChild>
-                    <Button variant="outline">Cancel</Button>
-                  </DialogClose>
-                  <Button onClick={handleConnect}>Connect</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
 
             <Dialog
               open={buyOpen}
@@ -352,6 +297,21 @@ export default function PhoneNumbers() {
           </div>
         )}
       </div>
+
+      {exotelConnected === false && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Exotel not connected</AlertTitle>
+          <AlertDescription className="flex items-center justify-between gap-3">
+            <span>
+              Connect your Exotel account in Integrations to import numbers and place calls.
+            </span>
+            <Button asChild size="sm" variant="outline">
+              <RouterLink to="/integrations">Go to Integrations</RouterLink>
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader>
