@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
-import { Phone, MoreHorizontal, Link as LinkIcon, UserPlus, Trash2, ShoppingCart, Search, Loader2, Plug } from "lucide-react";
+import { Link as RouterLink } from "react-router-dom";
+import { Phone, MoreHorizontal, UserPlus, Trash2, ShoppingCart, Search, Loader2, Plug, AlertTriangle } from "lucide-react";
 import ExotelConnectDialog from "@/components/exotel/ExotelConnectDialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -52,8 +54,8 @@ export default function PhoneNumbers() {
   const [loading, setLoading] = useState(true);
 
   const [buyOpen, setBuyOpen] = useState(false);
-  const [connectOpen, setConnectOpen] = useState(false);
   const [exotelConnectOpen, setExotelConnectOpen] = useState(false);
+  const [exotelConnected, setExotelConnected] = useState<boolean | null>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [activeNumber, setActiveNumber] = useState<PhoneNumber | null>(null);
 
@@ -70,6 +72,13 @@ export default function PhoneNumbers() {
     { phone_number: string; type: string; monthly_rental?: string; setup_fee?: string }[]
   >([]);
 
+  const checkExotelStatus = useCallback(async () => {
+    const { data } = await supabase.functions.invoke("exotel-connect", {
+      body: { action: "status" },
+    });
+    setExotelConnected(((data as any)?.accounts ?? []).length > 0);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     const [{ data: nums }, { data: ag }] = await Promise.all([
@@ -83,7 +92,8 @@ export default function PhoneNumbers() {
 
   useEffect(() => {
     load();
-  }, [load]);
+    checkExotelStatus();
+  }, [load, checkExotelStatus]);
 
   const resolveTeamId = async (): Promise<string | null> => {
     if (teamId) return teamId;
