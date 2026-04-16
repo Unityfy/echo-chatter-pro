@@ -258,10 +258,15 @@ Deno.serve(async (req) => {
     if (action === "status") {
       const { data, error } = await admin
         .from("exotel_accounts")
-        .select("id, account_sid, subdomain, status, last_validated_at, created_at")
+        .select("id, account_sid, subdomain, status, last_validated_at, created_at, webhook_token")
         .eq("team_id", teamId);
       if (error) return json({ error: error.message }, 400);
-      return json({ accounts: data ?? [] });
+      // Build the webhook URL each client should configure in Exotel.
+      const accounts = (data ?? []).map((a: any) => ({
+        ...a,
+        webhook_url: `${SUPABASE_URL}/functions/v1/exotel-incoming-call?token=${a.webhook_token}`,
+      }));
+      return json({ accounts });
     }
 
     return json({ error: "Unknown action" }, 400);
