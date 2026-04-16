@@ -57,8 +57,16 @@ export default function PhoneNumbers() {
 
   const [phoneInput, setPhoneInput] = useState("");
   const [providerIdInput, setProviderIdInput] = useState("");
-  const [areaCode, setAreaCode] = useState("");
   const [assignAgentId, setAssignAgentId] = useState<string>("none");
+
+  // Buy flow
+  const [buyCountry, setBuyCountry] = useState("IN");
+  const [buyType, setBuyType] = useState<"virtual" | "toll_free">("virtual");
+  const [searching, setSearching] = useState(false);
+  const [purchasing, setPurchasing] = useState<string | null>(null);
+  const [available, setAvailable] = useState<
+    { phone_number: string; type: string; monthly_rental?: string; setup_fee?: string }[]
+  >([]);
 
   const load = useCallback(async () => {
     setLoading(true);
