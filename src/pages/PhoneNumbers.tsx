@@ -59,8 +59,6 @@ export default function PhoneNumbers() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [activeNumber, setActiveNumber] = useState<PhoneNumber | null>(null);
 
-  const [phoneInput, setPhoneInput] = useState("");
-  const [providerIdInput, setProviderIdInput] = useState("");
   const [assignAgentId, setAssignAgentId] = useState<string>("none");
 
   // Buy flow
@@ -95,17 +93,7 @@ export default function PhoneNumbers() {
     checkExotelStatus();
   }, [load, checkExotelStatus]);
 
-  const resolveTeamId = async (): Promise<string | null> => {
-    if (teamId) return teamId;
-    if (!user) return null;
-    const { data } = await supabase
-      .from("team_members")
-      .select("team_id")
-      .eq("user_id", user.id)
-      .limit(1)
-      .maybeSingle();
-    return data?.team_id ?? null;
-  };
+  // (resolveTeamId removed — no longer needed since manual connect was removed)
 
   const handleSearch = async () => {
     setSearching(true);
