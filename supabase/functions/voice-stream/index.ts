@@ -948,12 +948,19 @@ Deno.serve(async (req) => {
     return new Response("Expected WebSocket upgrade", { status: 426 });
   }
 
-  const providerName = (url.searchParams.get("provider") ?? "exotel") as ProviderName;
+  const providerNameRaw = url.searchParams.get("provider") ?? "exotel";
   const agentId = url.searchParams.get("agent_id") ?? "";
   const callSid = url.searchParams.get("call_sid") ?? "";
 
-  const provider = PROVIDERS[providerName];
-  if (!provider) return new Response(`unknown provider: ${providerName}`, { status: 400 });
+  // Validate against the registry — guards against typos and is the single
+  // source of truth for which providers are wired up.
+  if (!(providerNameRaw in PROVIDERS)) {
+    return new Response(
+      `unknown provider: ${providerNameRaw}. supported: ${Object.keys(PROVIDERS).join(", ")}`,
+      { status: 400 },
+    );
+  }
+  const provider = PROVIDERS[providerNameRaw as ProviderName];
   if (!agentId) return new Response("missing agent_id", { status: 400 });
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
