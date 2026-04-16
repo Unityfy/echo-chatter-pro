@@ -210,6 +210,13 @@ const PROVIDERS: Record<ProviderName, ProviderAdapter> = {
   plivo: plivoAdapter,
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+//  ┃ LAYER 2: SESSION ENGINE (provider-independent)
+// ════════════════════════════════════════════════════════════════════════════
+//  Everything below this line is agnostic of the telephony provider — it
+//  only depends on the ProviderAdapter interface above. To add a provider,
+//  do NOT modify code below this banner; add an adapter in Layer 1 instead.
+
 // ─── Audio codecs (μ-law ⇄ PCM16, 8k ⇄ 16k) ────────────────────────────────
 // Pure-Deno conversions. STT wants PCM16 16kHz; provider speaks μ-law 8kHz.
 
@@ -923,7 +930,12 @@ async function runSession(opts: {
   socket.onerror = (e) => console.error("client ws error:", e);
 }
 
-// ─── Entrypoint ────────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  ┃ LAYER 3: ENTRYPOINT
+// ════════════════════════════════════════════════════════════════════════════
+//  Thin Deno.serve handler: validate query, look up the provider adapter and
+//  the agent, upgrade the WebSocket, and hand the socket to the session
+//  engine. No business logic lives here.
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
