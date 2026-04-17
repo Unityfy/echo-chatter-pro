@@ -85,6 +85,20 @@ Deno.serve(async (req) => {
     return sayAndHangup("This service is not configured. Goodbye.");
   }
 
+  // Test mode — quick smoke test bypassing DB lookups.
+  // Usage: GET/POST .../exotel-incoming-call?token=<token>&test=1
+  if (url.searchParams.get("test") === "1") {
+    const from = url.searchParams.get("From") || url.searchParams.get("from") || "unknown";
+    const to = url.searchParams.get("To") || url.searchParams.get("to") || "unknown";
+    console.log(JSON.stringify({ evt: "test_mode", from, to, ip: clientIp, elapsed_ms: Date.now() - startedAt }));
+    return xml(
+      `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say>Hello, this is a test AI agent.</Say>
+</Response>`,
+    );
+  }
+
   // 2) Optional IP allowlist
   if (!isAllowedIp(clientIp)) {
     console.warn(`Rejected: IP ${clientIp} not in allowlist`);
