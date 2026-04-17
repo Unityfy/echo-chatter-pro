@@ -85,18 +85,99 @@ Deno.serve(async (req) => {
     return sayAndHangup("This service is not configured. Goodbye.");
   }
 
-  // Test mode — quick smoke test bypassing DB lookups.
-  // Usage: GET/POST .../exotel-incoming-call?token=<token>&test=1
+  // Test mode — bypasses token→workspace lookup but still logs the call and
+  // resolves the assigned agent. Use this to confirm Exotel reaches the webhook
+  // without needing a connected exotel_accounts row.
+  // Usage: GET/POST .../exotel-incoming-call?token=<any-16+chars>&test=1
   if (url.searchParams.get("test") === "1") {
-    const from = url.searchParams.get("From") || url.searchParams.get("from") || "unknown";
-    const to = url.searchParams.get("To") || url.searchParams.get("to") || "unknown";
-    console.log(JSON.stringify({ evt: "test_mode", from, to, ip: clientIp, elapsed_ms: Date.now() - startedAt }));
-    return xml(
-      `<?xml version="1.0" encoding="UTF-8"?>
+    // Merge query + form/json body so this works for both GET and POST
+    let bodyPayload: Record<string, string> = {};
+    if (req.method === "POST") {
+      const ct = req.headers.get("content-type") || "";
+      try {
+        if (ct.includes("application/x-www-form-urlencoded")) {
+          bodyPayload = Object.fromEntries(new URLSearchParams(await req.text()));
+        } else if (ct.includes("application/json")) {
+          bodyPayload = await req.json();
+        }
+      } catch (_) { /* ignore parse errors */ }
+    }
+    const get = (k: string) => bodyPayload[k] ?? url.searchParams.get(k) ?? null;
+    const callSid = get("CallSid") || get("call_sid");
+    const fromNumber = get("From") || get("from") || get("CallFrom");
+    const toNumber = get("To") || get("to") || get("CallTo") || get("DialWhomNumber");
+
+    console.log(JSON.stringify({
+      evt: "webhook_trigger",
+      mode: "test",
+      from: fromNumber, to: toNumber, call_sid: callSid, ip: clientIp,
+    }));
+
+    // Best-effort: log to DB and resolve assigned agent's welcome message
+    let greeting = "Hello, this is a test AI agent. How can I help you?";
+    try {
+      const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+      const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const admin = createClient(SUPABASE_URL, SERVICE_ROLE);
+
+      let agentId: string | null = null;
+      let phoneNumberId: string | null = null;
+      let teamId: string | null = null;
+
+      if (toNumber) {
+        const candidates = [
+          toNumber,
+          toNumber.replace(/^\+/, ""),
+          `+${toNumber.replace(/^\+/, "")}`,
+          toNumber.replace(/^0/, "+91"),
+          toNumber.replace(/^0/, "91"),
+        ];
+        const { data: pn } = await admin
+          .from("phone_numbers")
+          .select("id, team_id, agent_id, agents(name, welcome_message)")
+          .in("phone_number", candidates)
+          .maybeSingle();
+        if (pn) {
+          phoneNumberId = pn.id;
+          teamId = pn.team_id;
+          agentId = pn.agent_id;
+          const agent = (pn as any).agents;
+          if (agent?.welcome_message) greeting = agent.welcome_message;
+          console.log(JSON.stringify({ evt: "agent_selected", agent_id: agentId, agent_name: agent?.name ?? null, phone_number_id: phoneNumberId }));
+        } else {
+          console.warn(JSON.stringify({ evt: "agent_not_found", to: toNumber }));
+        }
+      }
+
+      if (teamId) {
+        const { error: logErr } = await admin.from("calls").insert({
+          team_id: teamId,
+          agent_id: agentId,
+          phone_number_id: phoneNumberId,
+          provider: "exotel",
+          call_sid: callSid,
+          direction: "inbound",
+          from_number: fromNumber,
+          to_number: toNumber,
+          status: agentId ? "test-answered" : "no-agent",
+          answered_at: new Date().toISOString(),
+          metadata: { mode: "test", payload: bodyPayload, query: Object.fromEntries(url.searchParams) },
+        });
+        if (logErr) console.error("test-mode call log failed:", logErr.message);
+      } else {
+        console.warn(JSON.stringify({ evt: "skip_call_log", reason: "no_team_resolved" }));
+      }
+    } catch (e) {
+      console.error("test-mode side-effects error:", e);
+    }
+
+    const responseXml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say>Hello, this is a test AI agent.</Say>
-</Response>`,
-    );
+  <Say voice="female">${escapeXml(greeting)}</Say>
+  <Hangup/>
+</Response>`;
+    console.log(JSON.stringify({ evt: "response_sent", mode: "test", greeting, elapsed_ms: Date.now() - startedAt }));
+    return xml(responseXml);
   }
 
   // 2) Optional IP allowlist
