@@ -80,12 +80,49 @@ Deno.serve(async (req) => {
   const startedAt = Date.now();
   const url = new URL(req.url);
   const token = url.searchParams.get("token");
+  const testMode = url.searchParams.get("test") === "1";
   const clientIp =
     req.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
     req.headers.get("cf-connecting-ip") ||
     null;
 
-  console.log(JSON.stringify({ evt: "incoming_call_webhook", method: req.method, ip: clientIp }));
+  // Capture raw body once so we can log it AND still parse it below.
+  const contentType = req.headers.get("content-type") || "";
+  let rawBody = "";
+  let parsedBody: Record<string, string> = {};
+  if (req.method === "POST") {
+    try {
+      rawBody = await req.text();
+      if (contentType.includes("application/x-www-form-urlencoded")) {
+        parsedBody = Object.fromEntries(new URLSearchParams(rawBody));
+      } else if (contentType.includes("application/json") && rawBody) {
+        try { parsedBody = JSON.parse(rawBody); } catch { /* ignore */ }
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  const queryParams = Object.fromEntries(url.searchParams);
+  const sniffFrom = parsedBody.From ?? parsedBody.from ?? parsedBody.CallFrom ?? queryParams.From ?? queryParams.from ?? queryParams.CallFrom ?? null;
+  const sniffTo = parsedBody.To ?? parsedBody.to ?? parsedBody.CallTo ?? parsedBody.DialWhomNumber ?? queryParams.To ?? queryParams.to ?? queryParams.CallTo ?? queryParams.DialWhomNumber ?? null;
+
+  console.log(JSON.stringify({
+    evt: "incoming_call_webhook",
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    ip: clientIp,
+    test_mode: testMode,
+    from: sniffFrom,
+    to: sniffTo,
+    content_type: contentType,
+    query_params: { ...queryParams, token: token ? `${token.slice(0, 4)}…(len:${token.length})` : null },
+    raw_body: rawBody || null,
+    parsed_body: parsedBody,
+    headers: {
+      "user-agent": req.headers.get("user-agent"),
+      "x-forwarded-for": req.headers.get("x-forwarded-for"),
+      "cf-connecting-ip": req.headers.get("cf-connecting-ip"),
+    },
+  }));
 
   // 1) Token guard
   if (!token || token.length < 16) {
@@ -97,19 +134,9 @@ Deno.serve(async (req) => {
   // resolves the assigned agent. Use this to confirm Exotel reaches the webhook
   // without needing a connected exotel_accounts row.
   // Usage: GET/POST .../exotel-incoming-call?token=<any-16+chars>&test=1
-  if (url.searchParams.get("test") === "1") {
-    // Merge query + form/json body so this works for both GET and POST
-    let bodyPayload: Record<string, string> = {};
-    if (req.method === "POST") {
-      const ct = req.headers.get("content-type") || "";
-      try {
-        if (ct.includes("application/x-www-form-urlencoded")) {
-          bodyPayload = Object.fromEntries(new URLSearchParams(await req.text()));
-        } else if (ct.includes("application/json")) {
-          bodyPayload = await req.json();
-        }
-      } catch (_) { /* ignore parse errors */ }
-    }
+  if (testMode) {
+    // Body already captured above; re-use it (works for both GET query & POST body)
+    const bodyPayload: Record<string, string> = parsedBody;
     const get = (k: string) => bodyPayload[k] ?? url.searchParams.get(k) ?? null;
     const callSid = get("CallSid") || get("call_sid");
     const fromNumber = get("From") || get("from") || get("CallFrom");
