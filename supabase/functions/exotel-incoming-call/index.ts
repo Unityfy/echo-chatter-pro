@@ -211,8 +211,7 @@ Deno.serve(async (req) => {
   <Say voice="female">${escapeXml(greeting)}</Say>
   <Hangup/>
 </Response>`;
-    console.log(JSON.stringify({ evt: "response_sent", mode: "test", greeting, elapsed_ms: Date.now() - startedAt }));
-    return xml(responseXml);
+    return xml(responseXml, 200, { mode: "test", greeting, elapsed_ms: Date.now() - startedAt });
   }
 
   // 2) Optional IP allowlist
