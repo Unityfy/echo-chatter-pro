@@ -221,18 +221,8 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // 3) Parse Exotel webhook (form-encoded for POST, query for GET)
-    let payload: Record<string, string> = {};
-    if (req.method === "POST") {
-      const ct = req.headers.get("content-type") || "";
-      if (ct.includes("application/x-www-form-urlencoded")) {
-        const text = await req.text();
-        payload = Object.fromEntries(new URLSearchParams(text));
-      } else if (ct.includes("application/json")) {
-        payload = await req.json().catch(() => ({}));
-      }
-    }
-    // Merge in query params (Exotel sends some via query)
+    // 3) Use the body already parsed at request entry; merge query params
+    const payload: Record<string, string> = { ...parsedBody };
     url.searchParams.forEach((v, k) => {
       if (k !== "token" && !(k in payload)) payload[k] = v;
     });
