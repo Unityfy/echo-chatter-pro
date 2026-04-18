@@ -26,20 +26,28 @@ const EXOTEL_IP_ALLOWLIST: string[] = [
   // "3.108.0.0/16", "13.232.0.0/16", "65.0.0.0/16",
 ];
 
-function xml(body: string, status = 200) {
+function xml(body: string, status = 200, context: Record<string, unknown> = {}) {
+  console.log(JSON.stringify({
+    evt: "xml_response",
+    status,
+    xml: body,
+    ...context,
+  }));
   return new Response(body, {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/xml; charset=utf-8" },
   });
 }
 
-function sayAndHangup(message: string) {
+function sayAndHangup(message: string, context: Record<string, unknown> = {}) {
   return xml(
     `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="female">${escapeXml(message)}</Say>
   <Hangup/>
 </Response>`,
+    200,
+    { reason: "say_and_hangup", message, ...context },
   );
 }
 
