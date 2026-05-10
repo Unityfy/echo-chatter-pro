@@ -808,6 +808,16 @@ async function runSession(opts: {
   const llmModel = llmProvider === "openai" ? llm.model : (llm.provider === "openai" ? "google/gemini-3-flash-preview" : llm.model);
   const llmKey = llmProvider === "openai" ? (openaiKey as string) : lovableKey;
 
+  // Knowledge bases attached to this agent (and its intent overrides) — loaded
+  // once per session, queried per-turn for RAG context injection.
+  let knowledge: AgentKnowledge = { baseKbIds: [], intents: [] };
+  try {
+    knowledge = await loadAgentKnowledge(supabase, agent.id);
+    console.log(`KB loaded: ${knowledge.baseKbIds.length} base KBs, ${knowledge.intents.length} intents`);
+  } catch (e) {
+    console.error("loadAgentKnowledge failed:", e);
+  }
+
   // Per-session aggregates persisted at end of call.
   let totalPromptTokens = 0;
   let totalCompletionTokens = 0;
