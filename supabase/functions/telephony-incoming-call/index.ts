@@ -117,17 +117,22 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     const logCall = async (extra: Record<string, unknown>) => {
-      await admin.from("calls").insert({
-        team_id: teamId,
-        agent_id: pn?.agent_id ?? null,
-        phone_number_id: pn?.id ?? null,
-        provider: provider.id,
-        call_sid: call.call_sid,
-        direction: "inbound",
-        from_number: call.from_number,
-        to_number: call.to_number,
-        ...extra,
-      }).catch((e) => console.error("call log failed:", e));
+      try {
+        const { error } = await admin.from("calls").insert({
+          team_id: teamId,
+          agent_id: pn?.agent_id ?? null,
+          phone_number_id: pn?.id ?? null,
+          provider: provider.id,
+          call_sid: call.call_sid,
+          direction: "inbound",
+          from_number: call.from_number,
+          to_number: call.to_number,
+          ...extra,
+        });
+        if (error) console.error("call log failed:", error);
+      } catch (e) {
+        console.error("call log threw:", e);
+      }
     };
 
     if (!pn) {
