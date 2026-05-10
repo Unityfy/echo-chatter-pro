@@ -576,6 +576,7 @@ async function streamLlm(opts: {
   let buf = "";
   let pending = "";
   let full = "";
+  let usage: LlmUsage | null = null;
   const SENTENCE = /([\.!?…]\s+|[\n])/;
 
   const flushSentences = () => {
