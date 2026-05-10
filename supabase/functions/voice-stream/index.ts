@@ -344,14 +344,27 @@ async function endCallLog(
   callId: string,
   startedAtMs: number,
   status: string,
+  metrics?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    avg_latency_ms?: number | null;
+    p95_latency_ms?: number | null;
+    turns?: number;
+    llm_provider?: string;
+    llm_model?: string;
+  },
 ) {
   const ended = new Date();
+  const { data: existing } = await supabase.from("calls").select("metadata").eq("id", callId).maybeSingle();
+  const meta = (existing?.metadata ?? {}) as Record<string, unknown>;
+  const merged = metrics ? { ...meta, metrics: { ...(meta.metrics as object ?? {}), ...metrics } } : meta;
   await supabase
     .from("calls")
     .update({
       status,
       ended_at: ended.toISOString(),
       duration_seconds: Math.round((ended.getTime() - startedAtMs) / 1000),
+      metadata: merged,
     })
     .eq("id", callId);
 }
@@ -522,25 +535,50 @@ async function streamTts(opts: {
   }
 }
 
-// ─── LLM call (Lovable AI Gateway, streaming) ──────────────────────────────
+// ─── LLM call (OpenAI GPT-4.1 OR Lovable AI Gateway, streaming) ───────────
+
+type LlmProvider = "openai" | "lovable";
+
+interface LlmUsage { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+
+/** Resolve which LLM backend + model id to use based on the agent's `model` field.
+ *  Anything that looks like a GPT model routes to OpenAI directly (requires
+ *  OPENAI_API_KEY); everything else goes through the Lovable AI Gateway. */
+function resolveLlm(modelField: string | null | undefined): { provider: LlmProvider; model: string } {
+  const raw = (modelField || "").trim();
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("gpt") || lower.startsWith("openai/") || lower.startsWith("o1") || lower.startsWith("o3")) {
+    // Normalise display labels like "GPT-4.1" → "gpt-4.1", strip "openai/" prefix.
+    const id = raw.replace(/^openai\//i, "").toLowerCase();
+    return { provider: "openai", model: id || "gpt-4.1" };
+  }
+  return { provider: "lovable", model: raw || "google/gemini-3-flash-preview" };
+}
 
 async function streamLlm(opts: {
+  provider: LlmProvider;
   apiKey: string;
   model: string;
   systemPrompt: string;
   history: { role: "user" | "assistant"; content: string }[];
   signal: AbortSignal;
   onSentence: (sentence: string) => void;
-  onComplete: (full: string) => void;
+  onComplete: (full: string, usage: LlmUsage | null) => void;
 }): Promise<void> {
-  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const isOpenAi = opts.provider === "openai";
+  const endpoint = isOpenAi
+    ? "https://api.openai.com/v1/chat/completions"
+    : "https://ai.gateway.lovable.dev/v1/chat/completions";
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    stream: true,
+    messages: [{ role: "system", content: opts.systemPrompt }, ...opts.history],
+  };
+  if (isOpenAi) body.stream_options = { include_usage: true };
+  const resp = await fetch(endpoint, {
     method: "POST",
     headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: opts.model,
-      stream: true,
-      messages: [{ role: "system", content: opts.systemPrompt }, ...opts.history],
-    }),
+    body: JSON.stringify(body),
     signal: opts.signal,
   });
   if (!resp.ok || !resp.body) {
@@ -551,6 +589,7 @@ async function streamLlm(opts: {
   let buf = "";
   let pending = "";
   let full = "";
+  let usage: LlmUsage | null = null;
   const SENTENCE = /([\.!?…]\s+|[\n])/;
 
   const flushSentences = () => {
@@ -583,6 +622,14 @@ async function streamLlm(opts: {
           full += delta;
           flushSentences();
         }
+        // OpenAI emits a final chunk with usage when stream_options.include_usage=true.
+        if (json.usage && typeof json.usage === "object") {
+          usage = {
+            prompt_tokens: json.usage.prompt_tokens ?? 0,
+            completion_tokens: json.usage.completion_tokens ?? 0,
+            total_tokens: json.usage.total_tokens ?? 0,
+          };
+        }
       } catch {
         /* ignore partial frame */
       }
@@ -593,7 +640,7 @@ async function streamLlm(opts: {
     opts.onSentence(pending.trim());
     pending = "";
   }
-  opts.onComplete(full.trim());
+  opts.onComplete(full.trim(), usage);
 }
 
 // ─── Session orchestrator ──────────────────────────────────────────────────
@@ -606,8 +653,9 @@ async function runSession(opts: {
   supabase: ReturnType<typeof createClient>;
   lovableKey: string;
   elevenKey: string;
+  openaiKey: string | null;
 }) {
-  const { socket, provider, agent, callId, supabase, lovableKey, elevenKey } = opts;
+  const { socket, provider, agent, callId, supabase, lovableKey, elevenKey, openaiKey } = opts;
   const startedAtMs = Date.now();
 
   let sessionId = ""; // opaque provider-issued id (stream_sid / streamSid / streamId)
@@ -616,7 +664,16 @@ async function runSession(opts: {
     (agent.prompt && agent.prompt.trim()) ||
     "You are a helpful AI voice agent. Keep replies short and conversational — they will be spoken aloud.";
   const voiceId = agent.voice || "EXAVITQu4vr4xnSDxMaL";
-  const model = agent.model || "google/gemini-3-flash-preview";
+  const llm = resolveLlm(agent.model);
+  // If agent is configured for OpenAI but the key is missing, fall back to gateway.
+  const llmProvider: LlmProvider = llm.provider === "openai" && !openaiKey ? "lovable" : llm.provider;
+  const llmModel = llmProvider === "openai" ? llm.model : (llm.provider === "openai" ? "google/gemini-3-flash-preview" : llm.model);
+  const llmKey = llmProvider === "openai" ? (openaiKey as string) : lovableKey;
+
+  // Per-session aggregates persisted at end of call.
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  const turnLatencies: number[] = []; // ms from user-final → first TTS audio byte sent
 
   // ── State for turn-taking / barge-in ──────────────────────────────────────
   let agentSpeaking = false;
@@ -641,6 +698,27 @@ async function runSession(opts: {
     }
   };
 
+  // Helper: insert a row into call_messages (best-effort, never throws).
+  const logMessage = (
+    role: "user" | "assistant" | "system",
+    content: string,
+    extra: { latency_ms?: number; metadata?: Record<string, unknown> } = {},
+  ) => {
+    if (!callId) return;
+    supabase.from("call_messages").insert({
+      call_id: callId,
+      role,
+      content,
+      latency_ms: extra.latency_ms ?? null,
+      metadata: extra.metadata ?? {},
+    }).then(({ error }) => {
+      if (error) console.error("call_messages insert failed:", error.message);
+    });
+  };
+
+  // Track when we got the user's final transcript (start of agent's turn budget).
+  let turnStartAt = 0;
+
   /** Cancel the in-flight agent turn. Idempotent within a single turn. */
   const cancelAgentTurn = (reason: string) => {
     if (!agentSpeaking) return;
@@ -659,6 +737,7 @@ async function runSession(opts: {
     if (assistantPartial.trim()) {
       const partial = assistantPartial.trim();
       history.push({ role: "assistant", content: `${partial} [interrupted]` });
+      logMessage("assistant", partial, { metadata: { interrupted: true } });
       if (callId) {
         supabase.from("calls").select("metadata").eq("id", callId).maybeSingle()
           .then(({ data }) =>
@@ -672,7 +751,9 @@ async function runSession(opts: {
   };
 
   const speakAndAdvance = async (userText: string) => {
+    turnStartAt = Date.now();
     history.push({ role: "user", content: userText });
+    logMessage("user", userText);
     if (callId) {
       try {
         const { data } = await supabase.from("calls").select("metadata").eq("id", callId).maybeSingle();
@@ -690,10 +771,13 @@ async function runSession(opts: {
     const mySeq = turnSeq;       // capture for stale-chunk guard
 
     let assistantBuf = "";
+    let firstAudioAt = 0;
+    let turnUsage: LlmUsage | null = null;
     try {
       await streamLlm({
-        apiKey: lovableKey,
-        model,
+        provider: llmProvider,
+        apiKey: llmKey,
+        model: llmModel,
         systemPrompt,
         history,
         signal: llmAbort.signal,
@@ -706,13 +790,16 @@ async function runSession(opts: {
               text: sentence,
               voiceId,
               signal: ttsAbort!.signal,
-              onChunk: (mulaw) => sendAudioToCaller(mulaw, mySeq),
+              onChunk: (mulaw) => {
+                if (!firstAudioAt) firstAudioAt = Date.now();
+                sendAudioToCaller(mulaw, mySeq);
+              },
             });
           } catch (e) {
             if ((e as Error).name !== "AbortError") console.error("TTS chunk error:", e);
           }
         },
-        onComplete: (full) => { assistantBuf = full; },
+        onComplete: (full, usage) => { assistantBuf = full; turnUsage = usage; },
       });
     } catch (e) {
       if ((e as Error).name !== "AbortError") console.error("LLM stream error:", e);
@@ -720,6 +807,20 @@ async function runSession(opts: {
 
     // If we completed without barge-in, persist the full assistant turn.
     if (mySeq === turnSeq && assistantBuf) {
+      const latency = firstAudioAt ? firstAudioAt - turnStartAt : null;
+      if (latency != null) turnLatencies.push(latency);
+      if (turnUsage) {
+        totalPromptTokens += turnUsage.prompt_tokens;
+        totalCompletionTokens += turnUsage.completion_tokens;
+      }
+      logMessage("assistant", assistantBuf, {
+        latency_ms: latency ?? undefined,
+        metadata: {
+          llm_provider: llmProvider,
+          llm_model: llmModel,
+          ...(turnUsage ? { usage: turnUsage } : {}),
+        },
+      });
       history.push({ role: "assistant", content: assistantBuf });
       if (callId) {
         try {
@@ -877,8 +978,20 @@ async function runSession(opts: {
     cancelAgentTurn("socket close");
     stt?.close();
     if (callId) {
-      try { await endCallLog(supabase, callId, startedAtMs, "completed"); }
-      catch (e) { console.error("endCallLog failed:", e); }
+      const sorted = [...turnLatencies].sort((a, b) => a - b);
+      const avg = sorted.length ? Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length) : null;
+      const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : null;
+      try {
+        await endCallLog(supabase, callId, startedAtMs, "completed", {
+          prompt_tokens: totalPromptTokens,
+          completion_tokens: totalCompletionTokens,
+          avg_latency_ms: avg,
+          p95_latency_ms: p95,
+          turns: turnLatencies.length,
+          llm_provider: llmProvider,
+          llm_model: llmModel,
+        });
+      } catch (e) { console.error("endCallLog failed:", e); }
     }
   };
   socket.onerror = (e) => console.error("client ws error:", e);
@@ -921,6 +1034,7 @@ Deno.serve(async (req) => {
   const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   const ELEVENLABS_API_KEY = Deno.env.get("ELEVENLABS_API_KEY");
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") ?? null;
   if (!LOVABLE_API_KEY || !ELEVENLABS_API_KEY) {
     return new Response("voice keys not configured", { status: 500 });
   }
@@ -938,7 +1052,7 @@ Deno.serve(async (req) => {
     console.log(`voice-stream open provider=${provider.name} agent=${agent.id} call=${callSid}`);
     runSession({
       socket, provider, agent, callId, supabase,
-      lovableKey: LOVABLE_API_KEY, elevenKey: ELEVENLABS_API_KEY,
+      lovableKey: LOVABLE_API_KEY, elevenKey: ELEVENLABS_API_KEY, openaiKey: OPENAI_API_KEY,
     }).catch((e) => {
       console.error("session crashed:", e);
       try { socket.close(1011, "session-error"); } catch { /* */ }
