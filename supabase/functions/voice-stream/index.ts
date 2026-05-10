@@ -985,6 +985,7 @@ async function runSession(opts: {
           llm_provider: llmProvider,
           llm_model: llmModel,
           ...(turnUsage ? { usage: turnUsage } : {}),
+          ...(kbMeta ?? {}),
         },
       });
       history.push({ role: "assistant", content: assistantBuf });
