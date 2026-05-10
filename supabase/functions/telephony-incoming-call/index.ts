@@ -8,8 +8,22 @@ import { getProvider } from "../_telephony/registry.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-twilio-signature",
 };
+
+async function validateTwilioSignature(reqUrl: string, signature: string | null, params: Record<string, string>): Promise<boolean> {
+  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  if (!authToken) return true; // disabled until token is configured
+  if (!signature) return false;
+  const sortedKeys = Object.keys(params).sort();
+  let data = reqUrl;
+  for (const k of sortedKeys) data += k + params[k];
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(authToken), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(data));
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(sig)));
+  return b64 === signature;
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
