@@ -109,7 +109,14 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const preferredTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+      ];
+      const mimeType = preferredTypes.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       chunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
@@ -126,7 +133,8 @@ export function AgentTestPanel({ systemPrompt, voiceName, agentId }: AgentTestPa
           return;
         }
 
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const actualType = recorder.mimeType || chunksRef.current[0]?.type || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: actualType });
 
         setIsRunning(true);
         try {

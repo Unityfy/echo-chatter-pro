@@ -154,7 +154,9 @@ export async function generateSpeech(text: string, voiceName?: string): Promise<
  */
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const formData = new FormData();
-  formData.append("audio", audioBlob, "recording.webm");
+  const type = audioBlob.type || "audio/webm";
+  const ext = type.includes("mp4") ? "mp4" : type.includes("ogg") ? "ogg" : type.includes("wav") ? "wav" : "webm";
+  formData.append("audio", audioBlob, `recording.${ext}`);
 
   const response = await fetch(STT_URL, {
     method: "POST",
