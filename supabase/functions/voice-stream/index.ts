@@ -640,8 +640,9 @@ async function runSession(opts: {
   supabase: ReturnType<typeof createClient>;
   lovableKey: string;
   elevenKey: string;
+  openaiKey: string | null;
 }) {
-  const { socket, provider, agent, callId, supabase, lovableKey, elevenKey } = opts;
+  const { socket, provider, agent, callId, supabase, lovableKey, elevenKey, openaiKey } = opts;
   const startedAtMs = Date.now();
 
   let sessionId = ""; // opaque provider-issued id (stream_sid / streamSid / streamId)
@@ -650,7 +651,16 @@ async function runSession(opts: {
     (agent.prompt && agent.prompt.trim()) ||
     "You are a helpful AI voice agent. Keep replies short and conversational — they will be spoken aloud.";
   const voiceId = agent.voice || "EXAVITQu4vr4xnSDxMaL";
-  const model = agent.model || "google/gemini-3-flash-preview";
+  const llm = resolveLlm(agent.model);
+  // If agent is configured for OpenAI but the key is missing, fall back to gateway.
+  const llmProvider: LlmProvider = llm.provider === "openai" && !openaiKey ? "lovable" : llm.provider;
+  const llmModel = llmProvider === "openai" ? llm.model : (llm.provider === "openai" ? "google/gemini-3-flash-preview" : llm.model);
+  const llmKey = llmProvider === "openai" ? (openaiKey as string) : lovableKey;
+
+  // Per-session aggregates persisted at end of call.
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  const turnLatencies: number[] = []; // ms from user-final → first TTS audio byte sent
 
   // ── State for turn-taking / barge-in ──────────────────────────────────────
   let agentSpeaking = false;
