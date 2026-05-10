@@ -44,6 +44,7 @@ const mainItems: NavItem[] = [
   { title: "Analytics", url: "/analytics", icon: BarChart3, requiredPermission: "analytics.view" },
   { title: "Integrations", url: "/integrations", icon: Plug, requiredPermission: "integrations.view" },
   { title: "Knowledge Base", url: "/knowledge", icon: BookOpen, requiredPermission: "agents.view" },
+  { title: "Admin", url: "/admin", icon: ShieldCheck, requiredPermission: "settings.view" },
 ];
 
 const bottomItems: NavItem[] = [
