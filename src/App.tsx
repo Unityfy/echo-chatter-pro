@@ -22,6 +22,7 @@ import Integrations from "./pages/Integrations.tsx";
 import SettingsPage from "./pages/SettingsPage.tsx";
 import KnowledgeBase from "./pages/KnowledgeBase.tsx";
 import PhoneNumbers from "./pages/PhoneNumbers.tsx";
+import Admin from "./pages/Admin.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
