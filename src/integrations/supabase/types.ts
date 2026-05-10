@@ -571,6 +571,39 @@ export type Database = {
           },
         ]
       }
+      plan_limits: {
+        Row: {
+          created_at: string
+          id: string
+          monthly_cost_cap_usd: number
+          monthly_minutes_cap: number
+          monthly_tokens_cap: number
+          plan: string
+          team_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          monthly_cost_cap_usd?: number
+          monthly_minutes_cap?: number
+          monthly_tokens_cap?: number
+          plan?: string
+          team_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          monthly_cost_cap_usd?: number
+          monthly_minutes_cap?: number
+          monthly_tokens_cap?: number
+          plan?: string
+          team_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -604,6 +637,63 @@ export type Database = {
           id?: string
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      provider_health: {
+        Row: {
+          details: Json
+          id: string
+          last_checked_at: string
+          latency_ms: number | null
+          provider: string
+          status: string
+        }
+        Insert: {
+          details?: Json
+          id?: string
+          last_checked_at?: string
+          latency_ms?: number | null
+          provider: string
+          status?: string
+        }
+        Update: {
+          details?: Json
+          id?: string
+          last_checked_at?: string
+          latency_ms?: number | null
+          provider?: string
+          status?: string
+        }
+        Relationships: []
+      }
+      system_events: {
+        Row: {
+          context: Json
+          created_at: string
+          id: string
+          level: string
+          message: string
+          source: string
+          team_id: string | null
+        }
+        Insert: {
+          context?: Json
+          created_at?: string
+          id?: string
+          level?: string
+          message: string
+          source: string
+          team_id?: string | null
+        }
+        Update: {
+          context?: Json
+          created_at?: string
+          id?: string
+          level?: string
+          message?: string
+          source?: string
+          team_id?: string | null
         }
         Relationships: []
       }
@@ -672,6 +762,54 @@ export type Database = {
         }
         Relationships: []
       }
+      usage_events: {
+        Row: {
+          agent_id: string | null
+          call_id: string | null
+          cost_usd: number
+          created_at: string
+          id: string
+          kind: string
+          llm_completion_tokens: number
+          llm_prompt_tokens: number
+          metadata: Json
+          minutes: number
+          stt_seconds: number
+          team_id: string
+          tts_characters: number
+        }
+        Insert: {
+          agent_id?: string | null
+          call_id?: string | null
+          cost_usd?: number
+          created_at?: string
+          id?: string
+          kind: string
+          llm_completion_tokens?: number
+          llm_prompt_tokens?: number
+          metadata?: Json
+          minutes?: number
+          stt_seconds?: number
+          team_id: string
+          tts_characters?: number
+        }
+        Update: {
+          agent_id?: string | null
+          call_id?: string | null
+          cost_usd?: number
+          created_at?: string
+          id?: string
+          kind?: string
+          llm_completion_tokens?: number
+          llm_prompt_tokens?: number
+          metadata?: Json
+          minutes?: number
+          stt_seconds?: number
+          team_id?: string
+          tts_characters?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -689,6 +827,22 @@ export type Database = {
         Args: { _team_id: string; _user_id: string }
         Returns: boolean
       }
+      record_usage_event: {
+        Args: {
+          _agent_id: string
+          _call_id: string
+          _completion_tokens: number
+          _cost_usd: number
+          _kind: string
+          _metadata: Json
+          _minutes: number
+          _prompt_tokens: number
+          _stt_seconds: number
+          _team_id: string
+          _tts_characters: number
+        }
+        Returns: string
+      }
       search_knowledge_chunks: {
         Args: {
           _knowledge_base_ids: string[]
@@ -703,6 +857,17 @@ export type Database = {
           similarity: number
         }[]
       }
+      team_usage_this_month: {
+        Args: { _team_id: string }
+        Returns: {
+          cost_usd: number
+          minutes: number
+          stt_seconds: number
+          tokens: number
+          tts_characters: number
+        }[]
+      }
+      team_within_limits: { Args: { _team_id: string }; Returns: boolean }
     }
     Enums: {
       agent_status: "active" | "draft" | "paused" | "archived" | "inactive"
