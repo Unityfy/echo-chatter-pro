@@ -8,6 +8,7 @@ import {
   Plug,
   Settings,
   BookOpen,
+  ShieldCheck,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import {
