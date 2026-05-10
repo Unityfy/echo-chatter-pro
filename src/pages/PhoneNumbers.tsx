@@ -1,8 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Link as RouterLink } from "react-router-dom";
-import { Phone, MoreHorizontal, UserPlus, Trash2, ShoppingCart, Search, Loader2, Plug, AlertTriangle } from "lucide-react";
-import ExotelConnectDialog from "@/components/exotel/ExotelConnectDialog";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Phone, MoreHorizontal, UserPlus, Trash2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,7 +10,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
 } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -23,7 +20,6 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
 import { useRBAC } from "@/hooks/useRBAC";
-import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
 interface PhoneNumber {
@@ -42,10 +38,9 @@ interface AgentLite {
   name: string;
 }
 
-const db = supabase as any; // phone_numbers not yet in generated types
+const db = supabase as any;
 
 export default function PhoneNumbers() {
-  const { user } = useAuth();
   const { teamId, hasPermission } = useRBAC();
   const canManage = hasPermission("integrations.manage");
 
@@ -53,29 +48,14 @@ export default function PhoneNumbers() {
   const [agents, setAgents] = useState<AgentLite[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [buyOpen, setBuyOpen] = useState(false);
-  const [exotelConnectOpen, setExotelConnectOpen] = useState(false);
-  const [exotelConnected, setExotelConnected] = useState<boolean | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [newNumber, setNewNumber] = useState("");
+  const [newAgent, setNewAgent] = useState<string>("none");
+  const [adding, setAdding] = useState(false);
+
   const [assignOpen, setAssignOpen] = useState(false);
   const [activeNumber, setActiveNumber] = useState<PhoneNumber | null>(null);
-
   const [assignAgentId, setAssignAgentId] = useState<string>("none");
-
-  // Buy flow
-  const [buyCountry, setBuyCountry] = useState("IN");
-  const [buyType, setBuyType] = useState<"virtual" | "toll_free">("virtual");
-  const [searching, setSearching] = useState(false);
-  const [purchasing, setPurchasing] = useState<string | null>(null);
-  const [available, setAvailable] = useState<
-    { phone_number: string; type: string; monthly_rental?: string; setup_fee?: string }[]
-  >([]);
-
-  const checkExotelStatus = useCallback(async () => {
-    const { data } = await supabase.functions.invoke("exotel-connect", {
-      body: { action: "status" },
-    });
-    setExotelConnected(((data as any)?.accounts ?? []).length > 0);
-  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -88,46 +68,28 @@ export default function PhoneNumbers() {
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    load();
-    checkExotelStatus();
-  }, [load, checkExotelStatus]);
+  useEffect(() => { load(); }, [load]);
 
-  // (resolveTeamId removed — no longer needed since manual connect was removed)
-
-  const handleSearch = async () => {
-    setSearching(true);
-    setAvailable([]);
-    const { data, error } = await supabase.functions.invoke("exotel-numbers", {
-      body: { action: "list_available", country: buyCountry, number_type: buyType },
+  const handleAdd = async () => {
+    if (!teamId) return toast.error("No active workspace");
+    const phone = newNumber.trim();
+    if (!phone) return toast.error("Enter a phone number");
+    setAdding(true);
+    const { error } = await db.from("phone_numbers").insert({
+      team_id: teamId,
+      phone_number: phone,
+      provider: "twilio",
+      status: "active",
+      agent_id: newAgent === "none" ? null : newAgent,
     });
-    setSearching(false);
+    setAdding(false);
     if (error) return toast.error(error.message);
-    const list = (data as any)?.numbers ?? [];
-    if (list.length === 0) return toast.info("No numbers available right now");
-    setAvailable(list);
-  };
-
-  const handlePurchase = async (phone_number: string) => {
-    setPurchasing(phone_number);
-    const { data, error } = await supabase.functions.invoke("exotel-numbers", {
-      body: { action: "purchase", phone_number, number_type: buyType },
-    });
-    setPurchasing(null);
-    if (error) return toast.error(error.message);
-    const status = (data as any)?.status;
-    toast.success(
-      status === "active"
-        ? `${phone_number} purchased and active`
-        : `${phone_number} reserved — pending Exotel approval`,
-    );
-    setBuyOpen(false);
-    setAvailable([]);
+    toast.success("Number added");
+    setAddOpen(false);
+    setNewNumber("");
+    setNewAgent("none");
     load();
   };
-
-  // Manual "Connect Existing" flow removed — setup is now handled in Integrations,
-  // and numbers come in via Buy or Import from Exotel.
 
   const handleAssign = async () => {
     if (!activeNumber) return;
@@ -177,141 +139,11 @@ export default function PhoneNumbers() {
           </p>
         </div>
         {canManage && (
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setExotelConnectOpen(true)}
-              disabled={exotelConnected === false}
-              title={exotelConnected === false ? "Connect Exotel in Integrations first" : undefined}
-            >
-              <Plug className="mr-2 h-4 w-4" />
-              Import from Exotel
-            </Button>
-
-            <Dialog
-              open={buyOpen}
-              onOpenChange={(o) => {
-                setBuyOpen(o);
-                if (!o) setAvailable([]);
-              }}
-            >
-              <DialogTrigger asChild>
-                <Button>
-                  <ShoppingCart className="mr-2 h-4 w-4" />
-                  Buy Number
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-lg">
-                <DialogHeader>
-                  <DialogTitle>Buy a new number</DialogTitle>
-                  <DialogDescription>
-                    Search Exotel inventory and purchase a number for your workspace.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="country">Country</Label>
-                      <Select value={buyCountry} onValueChange={setBuyCountry}>
-                        <SelectTrigger id="country">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-popover">
-                          <SelectItem value="IN">🇮🇳 India</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="ntype">Number type</Label>
-                      <Select
-                        value={buyType}
-                        onValueChange={(v) => setBuyType(v as "virtual" | "toll_free")}
-                      >
-                        <SelectTrigger id="ntype">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="bg-popover">
-                          <SelectItem value="virtual">Virtual (Local)</SelectItem>
-                          <SelectItem value="toll_free">Toll-Free</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <Button
-                    variant="outline"
-                    className="w-full"
-                    onClick={handleSearch}
-                    disabled={searching}
-                  >
-                    {searching ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Search className="mr-2 h-4 w-4" />
-                    )}
-                    Search available numbers
-                  </Button>
-
-                  {available.length > 0 && (
-                    <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border border-border p-2">
-                      {available.map((n) => (
-                        <div
-                          key={n.phone_number}
-                          className="flex items-center justify-between rounded-md p-2 hover:bg-muted/50"
-                        >
-                          <div>
-                            <p className="font-mono text-sm text-foreground">{n.phone_number}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {n.monthly_rental ?? "—"}/mo
-                              {n.setup_fee ? ` · setup ${n.setup_fee}` : ""}
-                            </p>
-                          </div>
-                          <Button
-                            size="sm"
-                            onClick={() => handlePurchase(n.phone_number)}
-                            disabled={purchasing === n.phone_number}
-                          >
-                            {purchasing === n.phone_number ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              "Buy"
-                            )}
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <p className="text-xs text-muted-foreground">
-                    Exotel may require KYC/manual approval. Newly purchased numbers may show
-                    as <span className="font-medium">pending</span> until activated.
-                  </p>
-                </div>
-                <DialogFooter>
-                  <DialogClose asChild>
-                    <Button variant="outline">Close</Button>
-                  </DialogClose>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          </div>
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" /> Add Number
+          </Button>
         )}
       </div>
-
-      {exotelConnected === false && (
-        <Alert>
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Exotel not connected</AlertTitle>
-          <AlertDescription className="flex items-center justify-between gap-3">
-            <span>
-              Connect your Exotel account in Integrations to import numbers and place calls.
-            </span>
-            <Button asChild size="sm" variant="outline">
-              <RouterLink to="/integrations">Go to Integrations</RouterLink>
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
 
       <Card>
         <CardHeader>
@@ -335,7 +167,7 @@ export default function PhoneNumbers() {
               <div>
                 <p className="font-medium text-foreground">No phone numbers yet</p>
                 <p className="text-sm text-muted-foreground">
-                  Buy or connect a number to start handling calls.
+                  Add a number to start handling calls.
                 </p>
               </div>
             </div>
@@ -416,7 +248,41 @@ export default function PhoneNumbers() {
         </CardContent>
       </Card>
 
-      <ExotelConnectDialog open={exotelConnectOpen} onOpenChange={setExotelConnectOpen} onImported={load} />
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add phone number</DialogTitle>
+            <DialogDescription>
+              Register a Twilio number for this workspace. Configure the Twilio voice webhook to
+              point at your <span className="font-mono">telephony-incoming-call</span> function.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="num">Phone number (E.164)</Label>
+              <Input id="num" placeholder="+16623663791" value={newNumber} onChange={(e) => setNewNumber(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="agent">Assign to agent</Label>
+              <Select value={newAgent} onValueChange={setNewAgent}>
+                <SelectTrigger id="agent"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-popover">
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button onClick={handleAdd} disabled={adding}>{adding ? "Adding…" : "Add"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
         <DialogContent>
@@ -428,24 +294,18 @@ export default function PhoneNumbers() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="agent">Agent</Label>
+            <Label htmlFor="agent2">Agent</Label>
             <Select value={assignAgentId} onValueChange={setAssignAgentId}>
-              <SelectTrigger id="agent">
-                <SelectValue placeholder="Select agent" />
-              </SelectTrigger>
+              <SelectTrigger id="agent2"><SelectValue placeholder="Select agent" /></SelectTrigger>
               <SelectContent className="bg-popover">
                 <SelectItem value="none">Unassigned</SelectItem>
                 {agents.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.name}
-                  </SelectItem>
+                  <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
             {agents.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                No agents available. Create an agent first.
-              </p>
+              <p className="text-xs text-muted-foreground">No agents available. Create an agent first.</p>
             )}
           </div>
           <DialogFooter>
