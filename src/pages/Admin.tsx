@@ -128,7 +128,7 @@ export default function Admin() {
     }
   };
 
-  const pct = (a: number, b: number) => (b > 0 ? Math.min(100, Math.round((a / b) * 100)) : 0);
+  
 
   const minutesCap = limits?.monthly_minutes_cap ?? 60;
   const tokensCap = limits?.monthly_tokens_cap ?? 200_000;
