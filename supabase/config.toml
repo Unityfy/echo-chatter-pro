@@ -1,11 +1,11 @@
 project_id = "trsccroicslqgsppbjzp"
 
-# Public webhook — called by Exotel without auth.
-# Secured via per-workspace token in the URL + optional IP allowlist.
-[functions.exotel-incoming-call]
+# Public webhook — called by the telephony provider (Twilio) without auth.
+# Authenticated by lookup of the called number in phone_numbers.
+[functions.telephony-incoming-call]
 verify_jwt = false
 
-# Public WS endpoint — called by the telephony provider (Exotel today).
+# Public WS endpoint — called by the telephony provider.
 # Authenticated by call_sid lookup + agent ownership scoping in code.
 [functions.voice-stream]
 verify_jwt = false

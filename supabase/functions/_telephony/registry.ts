@@ -1,12 +1,10 @@
 // Provider registry — single source of truth.
 // To add a new provider: import its adapter and register it here.
 import type { ProviderId, TelephonyProvider } from "./types.ts";
-import { exotelAdapter } from "./exotel.ts";
 import { knowlarityAdapter } from "./knowlarity.ts";
 import { twilioAdapter } from "./twilio.ts";
 
 const REGISTRY: Record<ProviderId, TelephonyProvider> = {
-  exotel: exotelAdapter,
   knowlarity: knowlarityAdapter,
   twilio: twilioAdapter,
 };
