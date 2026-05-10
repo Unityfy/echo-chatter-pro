@@ -29,7 +29,9 @@ Deno.serve(async (req) => {
     });
   }
 
-  if (!token || token.length < 16) {
+  // Twilio doesn't require a per-workspace token (single account, looked up via To number).
+  // Other providers still require a token of >=16 chars.
+  if (provider.id !== "twilio" && (!token || token.length < 16)) {
     return provider.renderControlResponse({ kind: "say_hangup", message: "This service is not configured. Goodbye." });
   }
 
@@ -59,8 +61,8 @@ Deno.serve(async (req) => {
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(SUPABASE_URL, SERVICE_ROLE);
 
-    // Token → workspace lookup. Currently only exotel_accounts has webhook_token.
-    // Extend with provider-specific account tables as new providers are added.
+    // Token → workspace lookup. For Twilio we resolve the workspace via the
+    // called number directly (the Twilio account belongs to the workspace owner).
     let teamId: string | null = null;
     if (provider.id === "exotel") {
       const { data: acct } = await admin
@@ -69,6 +71,15 @@ Deno.serve(async (req) => {
         .eq("webhook_token", token)
         .maybeSingle();
       teamId = acct?.team_id ?? null;
+    } else if (provider.id === "twilio" && call.to_number) {
+      const candidates = [call.to_number, call.to_number.replace(/^\+/, ""), `+${call.to_number.replace(/^\+/, "")}`];
+      const { data: pnRow } = await admin
+        .from("phone_numbers")
+        .select("team_id")
+        .eq("provider", "twilio")
+        .in("phone_number", candidates)
+        .maybeSingle();
+      teamId = pnRow?.team_id ?? null;
     }
     // TODO: knowlarity_accounts lookup once that table exists.
 

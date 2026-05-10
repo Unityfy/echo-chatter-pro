@@ -3,10 +3,12 @@
 import type { ProviderId, TelephonyProvider } from "./types.ts";
 import { exotelAdapter } from "./exotel.ts";
 import { knowlarityAdapter } from "./knowlarity.ts";
+import { twilioAdapter } from "./twilio.ts";
 
 const REGISTRY: Record<ProviderId, TelephonyProvider> = {
   exotel: exotelAdapter,
   knowlarity: knowlarityAdapter,
+  twilio: twilioAdapter,
 };
 
 export function getProvider(id: string): TelephonyProvider {
