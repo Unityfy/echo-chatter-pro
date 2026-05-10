@@ -51,6 +51,7 @@ const App = () => (
                 <Route path="/integrations" element={<Integrations />} />
                 <Route path="/knowledge" element={<KnowledgeBase />} />
                 <Route path="/phone-numbers" element={<PhoneNumbers />} />
+                <Route path="/admin" element={<Admin />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
               <Route path="*" element={<NotFound />} />
