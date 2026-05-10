@@ -311,6 +311,144 @@ async function loadAgent(supabase: ReturnType<typeof createClient>, agentId: str
   return data as AgentRecord | null;
 }
 
+// ─── Knowledge / RAG helpers ───────────────────────────────────────────────
+
+interface AgentIntent {
+  id: string;
+  name: string;
+  description: string | null;
+  kb_priority: string;
+  kb_ids: string[];
+}
+
+interface AgentKnowledge {
+  baseKbIds: string[];
+  intents: AgentIntent[];
+}
+
+async function loadAgentKnowledge(
+  supabase: ReturnType<typeof createClient>,
+  agentId: string,
+): Promise<AgentKnowledge> {
+  const [{ data: links }, { data: intents }] = await Promise.all([
+    supabase.from("agent_knowledge_bases").select("knowledge_base_id").eq("agent_id", agentId),
+    supabase.from("agent_intents").select("id, name, description, kb_priority").eq("agent_id", agentId),
+  ]);
+  const baseKbIds = (links ?? []).map((l: any) => l.knowledge_base_id).filter(Boolean);
+  const intentRows = (intents ?? []) as any[];
+  let intentList: AgentIntent[] = [];
+  if (intentRows.length > 0) {
+    const { data: intentKbLinks } = await supabase
+      .from("agent_intent_knowledge_bases")
+      .select("intent_id, knowledge_base_id")
+      .in("intent_id", intentRows.map((r) => r.id));
+    const byIntent = new Map<string, string[]>();
+    for (const row of (intentKbLinks ?? []) as any[]) {
+      const arr = byIntent.get(row.intent_id) ?? [];
+      arr.push(row.knowledge_base_id);
+      byIntent.set(row.intent_id, arr);
+    }
+    intentList = intentRows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description ?? null,
+      kb_priority: r.kb_priority || "intent_first",
+      kb_ids: byIntent.get(r.id) ?? [],
+    }));
+  }
+  return { baseKbIds, intents: intentList };
+}
+
+/** Lightweight intent matcher: pick the intent whose name/description has the
+ *  most token overlap with the user utterance. Returns null if none score > 0. */
+function pickIntent(userText: string, intents: AgentIntent[]): AgentIntent | null {
+  if (intents.length === 0) return null;
+  const tokens = new Set(
+    userText.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2),
+  );
+  let best: AgentIntent | null = null;
+  let bestScore = 0;
+  for (const intent of intents) {
+    const hay = `${intent.name} ${intent.description || ""}`.toLowerCase();
+    const hayTokens = hay.split(/[^a-z0-9]+/).filter((t) => t.length > 2);
+    let score = 0;
+    for (const t of hayTokens) if (tokens.has(t)) score++;
+    if (score > bestScore) { bestScore = score; best = intent; }
+  }
+  return best;
+}
+
+async function embedQuery(text: string, openaiKey: string | null, lovableKey: string): Promise<number[] | null> {
+  const useOpenAi = !!openaiKey;
+  const endpoint = useOpenAi
+    ? "https://api.openai.com/v1/embeddings"
+    : "https://ai.gateway.lovable.dev/v1/embeddings";
+  const apiKey = useOpenAi ? openaiKey! : lovableKey;
+  try {
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text,
+        dimensions: 768,
+      }),
+    });
+    if (!resp.ok) {
+      console.error("embedQuery failed:", resp.status, await resp.text().catch(() => ""));
+      return null;
+    }
+    const data = await resp.json();
+    return data?.data?.[0]?.embedding ?? null;
+  } catch (e) {
+    console.error("embedQuery error:", e);
+    return null;
+  }
+}
+
+async function retrieveKbContext(opts: {
+  supabase: ReturnType<typeof createClient>;
+  userText: string;
+  knowledge: AgentKnowledge;
+  openaiKey: string | null;
+  lovableKey: string;
+  matchCount?: number;
+}): Promise<{ context: string; intentName: string | null; chunkCount: number }> {
+  const matchCount = opts.matchCount ?? 4;
+  const intent = pickIntent(opts.userText, opts.knowledge.intents);
+  // Resolve effective KB ids based on intent priority.
+  let kbIds: string[] = [];
+  if (intent && intent.kb_ids.length > 0) {
+    kbIds = intent.kb_priority === "intent_only"
+      ? intent.kb_ids
+      : Array.from(new Set([...intent.kb_ids, ...opts.knowledge.baseKbIds]));
+  } else {
+    kbIds = opts.knowledge.baseKbIds;
+  }
+  if (kbIds.length === 0) return { context: "", intentName: intent?.name ?? null, chunkCount: 0 };
+
+  const embedding = await embedQuery(opts.userText, opts.openaiKey, opts.lovableKey);
+  if (!embedding) return { context: "", intentName: intent?.name ?? null, chunkCount: 0 };
+
+  const { data, error } = await opts.supabase.rpc("search_knowledge_chunks", {
+    _query_embedding: JSON.stringify(embedding),
+    _knowledge_base_ids: kbIds,
+    _match_count: matchCount,
+    _match_threshold: 0.5,
+  });
+  if (error) {
+    console.error("KB search error:", error.message);
+    return { context: "", intentName: intent?.name ?? null, chunkCount: 0 };
+  }
+  const rows = (data ?? []) as Array<{ content: string; similarity: number }>;
+  if (rows.length === 0) return { context: "", intentName: intent?.name ?? null, chunkCount: 0 };
+
+  const formatted = rows
+    .map((r, i) => `[${i + 1}] (relevance ${(r.similarity * 100).toFixed(0)}%)\n${r.content}`)
+    .join("\n\n");
+  return { context: formatted, intentName: intent?.name ?? null, chunkCount: rows.length };
+}
+
 // ─── Call log helpers ──────────────────────────────────────────────────────
 
 async function findCallByCallSid(supabase: ReturnType<typeof createClient>, callSid: string) {
