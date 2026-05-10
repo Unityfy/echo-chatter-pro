@@ -978,8 +978,20 @@ async function runSession(opts: {
     cancelAgentTurn("socket close");
     stt?.close();
     if (callId) {
-      try { await endCallLog(supabase, callId, startedAtMs, "completed"); }
-      catch (e) { console.error("endCallLog failed:", e); }
+      const sorted = [...turnLatencies].sort((a, b) => a - b);
+      const avg = sorted.length ? Math.round(sorted.reduce((a, b) => a + b, 0) / sorted.length) : null;
+      const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] : null;
+      try {
+        await endCallLog(supabase, callId, startedAtMs, "completed", {
+          prompt_tokens: totalPromptTokens,
+          completion_tokens: totalCompletionTokens,
+          avg_latency_ms: avg,
+          p95_latency_ms: p95,
+          turns: turnLatencies.length,
+          llm_provider: llmProvider,
+          llm_model: llmModel,
+        });
+      } catch (e) { console.error("endCallLog failed:", e); }
     }
   };
   socket.onerror = (e) => console.error("client ws error:", e);
