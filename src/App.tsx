@@ -22,6 +22,7 @@ import Integrations from "./pages/Integrations.tsx";
 import SettingsPage from "./pages/SettingsPage.tsx";
 import KnowledgeBase from "./pages/KnowledgeBase.tsx";
 import PhoneNumbers from "./pages/PhoneNumbers.tsx";
+import Admin from "./pages/Admin.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
 const queryClient = new QueryClient();
@@ -50,6 +51,7 @@ const App = () => (
                 <Route path="/integrations" element={<Integrations />} />
                 <Route path="/knowledge" element={<KnowledgeBase />} />
                 <Route path="/phone-numbers" element={<PhoneNumbers />} />
+                <Route path="/admin" element={<Admin />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Route>
               <Route path="*" element={<NotFound />} />

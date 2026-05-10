@@ -17,3 +17,7 @@ verify_jwt = false
 # Public webhook — Twilio call status callbacks. Validated via signature.
 [functions.telephony-status-callback]
 verify_jwt = false
+
+# Authenticated provider health probe; called from Admin dashboard.
+[functions.provider-health-check]
+verify_jwt = true

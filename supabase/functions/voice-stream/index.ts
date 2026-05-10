@@ -493,18 +493,57 @@ async function endCallLog(
   },
 ) {
   const ended = new Date();
-  const { data: existing } = await supabase.from("calls").select("metadata").eq("id", callId).maybeSingle();
+  const { data: existing } = await supabase
+    .from("calls")
+    .select("metadata, team_id, agent_id")
+    .eq("id", callId)
+    .maybeSingle();
   const meta = (existing?.metadata ?? {}) as Record<string, unknown>;
   const merged = metrics ? { ...meta, metrics: { ...(meta.metrics as object ?? {}), ...metrics } } : meta;
+  const durationSeconds = Math.round((ended.getTime() - startedAtMs) / 1000);
   await supabase
     .from("calls")
     .update({
       status,
       ended_at: ended.toISOString(),
-      duration_seconds: Math.round((ended.getTime() - startedAtMs) / 1000),
+      duration_seconds: durationSeconds,
       metadata: merged,
     })
     .eq("id", callId);
+
+  // Persist a usage_events row for billing aggregation. Best-effort; never throws.
+  try {
+    if (existing?.team_id && status === "completed") {
+      const minutes = Math.max(0, durationSeconds / 60);
+      const promptTokens = metrics?.prompt_tokens ?? 0;
+      const completionTokens = metrics?.completion_tokens ?? 0;
+      // Rough cost estimate: $0.005/min telephony + $0.0006/1k prompt + $0.0024/1k completion
+      const costUsd =
+        minutes * 0.005 +
+        (promptTokens / 1000) * 0.0006 +
+        (completionTokens / 1000) * 0.0024;
+      await supabase.rpc("record_usage_event", {
+        _team_id: existing.team_id,
+        _call_id: callId,
+        _agent_id: existing.agent_id ?? null,
+        _kind: "call",
+        _minutes: minutes,
+        _prompt_tokens: promptTokens,
+        _completion_tokens: completionTokens,
+        _stt_seconds: durationSeconds,
+        _tts_characters: 0,
+        _cost_usd: Number(costUsd.toFixed(6)),
+        _metadata: {
+          provider: metrics?.llm_provider ?? null,
+          model: metrics?.llm_model ?? null,
+          turns: metrics?.turns ?? 0,
+          avg_latency_ms: metrics?.avg_latency_ms ?? null,
+        },
+      });
+    }
+  } catch (e) {
+    console.error("record_usage_event failed:", e);
+  }
 }
 
 // ─── Streaming STT (ElevenLabs scribe_v2_realtime) ─────────────────────────
