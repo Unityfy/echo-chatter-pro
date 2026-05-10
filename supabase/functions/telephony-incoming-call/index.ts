@@ -52,10 +52,12 @@ Deno.serve(async (req) => {
   try {
     // Parse webhook body (form or JSON) + merge query params
     let payload: Record<string, string> = {};
+    let rawBody = "";
     if (req.method === "POST") {
       const ct = req.headers.get("content-type") || "";
       if (ct.includes("application/x-www-form-urlencoded")) {
-        payload = Object.fromEntries(new URLSearchParams(await req.text()));
+        rawBody = await req.text();
+        payload = Object.fromEntries(new URLSearchParams(rawBody));
       } else if (ct.includes("application/json")) {
         payload = await req.json().catch(() => ({}));
       }
@@ -63,6 +65,17 @@ Deno.serve(async (req) => {
     url.searchParams.forEach((v, k) => {
       if (k !== "token" && k !== "provider" && !(k in payload)) payload[k] = v;
     });
+
+    // Twilio signature validation (only if TWILIO_AUTH_TOKEN configured)
+    if (provider.id === "twilio" && req.method === "POST") {
+      const sig = req.headers.get("X-Twilio-Signature");
+      const formParams = Object.fromEntries(new URLSearchParams(rawBody));
+      const valid = await validateTwilioSignature(req.url, sig, formParams);
+      if (!valid) {
+        console.warn("Rejected request: invalid Twilio signature");
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
+    }
 
     // Provider parses its own payload shape
     const call = provider.parseIncomingWebhook(req, payload);
