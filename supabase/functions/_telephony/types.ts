@@ -2,7 +2,7 @@
 // Adding a new provider = create a new adapter file that implements TelephonyProvider
 // and register it in registry.ts. No call-routing or UI code needs to change.
 
-export type ProviderId = "exotel" | "knowlarity";
+export type ProviderId = "exotel" | "knowlarity" | "twilio";
 
 export interface ProviderCredentials {
   account_sid: string;
