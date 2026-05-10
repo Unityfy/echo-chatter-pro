@@ -1,0 +1,2 @@
+INSERT INTO public.phone_numbers (team_id, phone_number, agent_id, provider, status)
+VALUES ('0742f31b-148f-4894-b8c1-92bab1cb2ace', '+919270750094', 'a00a8b11-ea1d-4e43-8979-53a0bdcf7e78', 'exotel', 'active');
