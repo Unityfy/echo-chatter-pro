@@ -150,10 +150,6 @@ export default function Admin() {
 
   return (
     <div className="space-y-6 p-6">
-      <Helmet>
-        <title>Admin — VoxAgent</title>
-        <meta name="description" content="Platform administration: usage, billing, provider health, monitoring." />
-      </Helmet>
 
       <header className="flex items-center justify-between">
         <div>
