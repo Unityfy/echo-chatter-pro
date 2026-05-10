@@ -8,8 +8,22 @@ import { getProvider } from "../_telephony/registry.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-twilio-signature",
 };
+
+async function validateTwilioSignature(reqUrl: string, signature: string | null, params: Record<string, string>): Promise<boolean> {
+  const authToken = Deno.env.get("TWILIO_AUTH_TOKEN");
+  if (!authToken) return true; // disabled until token is configured
+  if (!signature) return false;
+  const sortedKeys = Object.keys(params).sort();
+  let data = reqUrl;
+  for (const k of sortedKeys) data += k + params[k];
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(authToken), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(data));
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(sig)));
+  return b64 === signature;
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -38,10 +52,12 @@ Deno.serve(async (req) => {
   try {
     // Parse webhook body (form or JSON) + merge query params
     let payload: Record<string, string> = {};
+    let rawBody = "";
     if (req.method === "POST") {
       const ct = req.headers.get("content-type") || "";
       if (ct.includes("application/x-www-form-urlencoded")) {
-        payload = Object.fromEntries(new URLSearchParams(await req.text()));
+        rawBody = await req.text();
+        payload = Object.fromEntries(new URLSearchParams(rawBody));
       } else if (ct.includes("application/json")) {
         payload = await req.json().catch(() => ({}));
       }
@@ -49,6 +65,17 @@ Deno.serve(async (req) => {
     url.searchParams.forEach((v, k) => {
       if (k !== "token" && k !== "provider" && !(k in payload)) payload[k] = v;
     });
+
+    // Twilio signature validation (only if TWILIO_AUTH_TOKEN configured)
+    if (provider.id === "twilio" && req.method === "POST") {
+      const sig = req.headers.get("X-Twilio-Signature");
+      const formParams = Object.fromEntries(new URLSearchParams(rawBody));
+      const valid = await validateTwilioSignature(req.url, sig, formParams);
+      if (!valid) {
+        console.warn("Rejected request: invalid Twilio signature");
+        return new Response("Forbidden", { status: 403, headers: corsHeaders });
+      }
+    }
 
     // Provider parses its own payload shape
     const call = provider.parseIncomingWebhook(req, payload);
