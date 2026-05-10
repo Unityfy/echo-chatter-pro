@@ -911,6 +911,24 @@ async function runSession(opts: {
       } catch (e) { console.error("transcript append (user) failed:", e); }
     }
 
+    // RAG: retrieve relevant KB chunks for this user turn (best-effort, never blocks).
+    let perTurnSystem = systemPrompt;
+    let kbMeta: Record<string, unknown> | null = null;
+    if (knowledge.baseKbIds.length > 0 || knowledge.intents.length > 0) {
+      try {
+        const ragStart = Date.now();
+        const { context, intentName, chunkCount } = await retrieveKbContext({
+          supabase, userText, knowledge, openaiKey, lovableKey,
+        });
+        if (context) {
+          perTurnSystem = `${systemPrompt}\n\n---\nUse ONLY the following knowledge to answer the user's question. If the answer is not in the knowledge, say so honestly.\n\n${context}`;
+        }
+        kbMeta = { rag_intent: intentName, rag_chunks: chunkCount, rag_latency_ms: Date.now() - ragStart };
+      } catch (e) {
+        console.error("RAG retrieval failed:", e);
+      }
+    }
+
     agentSpeaking = true;
     ttsStartedAt = Date.now();
     llmAbort = new AbortController();
@@ -926,7 +944,7 @@ async function runSession(opts: {
         provider: llmProvider,
         apiKey: llmKey,
         model: llmModel,
-        systemPrompt,
+        systemPrompt: perTurnSystem,
         history,
         signal: llmAbort.signal,
         onSentence: async (sentence) => {
