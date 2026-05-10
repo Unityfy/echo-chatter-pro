@@ -608,6 +608,14 @@ async function streamLlm(opts: {
           full += delta;
           flushSentences();
         }
+        // OpenAI emits a final chunk with usage when stream_options.include_usage=true.
+        if (json.usage && typeof json.usage === "object") {
+          usage = {
+            prompt_tokens: json.usage.prompt_tokens ?? 0,
+            completion_tokens: json.usage.completion_tokens ?? 0,
+            total_tokens: json.usage.total_tokens ?? 0,
+          };
+        }
       } catch {
         /* ignore partial frame */
       }
@@ -618,7 +626,7 @@ async function streamLlm(opts: {
     opts.onSentence(pending.trim());
     pending = "";
   }
-  opts.onComplete(full.trim());
+  opts.onComplete(full.trim(), usage);
 }
 
 // ─── Session orchestrator ──────────────────────────────────────────────────
