@@ -1034,6 +1034,7 @@ Deno.serve(async (req) => {
   const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   const ELEVENLABS_API_KEY = Deno.env.get("ELEVENLABS_API_KEY");
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") ?? null;
   if (!LOVABLE_API_KEY || !ELEVENLABS_API_KEY) {
     return new Response("voice keys not configured", { status: 500 });
   }
@@ -1051,7 +1052,7 @@ Deno.serve(async (req) => {
     console.log(`voice-stream open provider=${provider.name} agent=${agent.id} call=${callSid}`);
     runSession({
       socket, provider, agent, callId, supabase,
-      lovableKey: LOVABLE_API_KEY, elevenKey: ELEVENLABS_API_KEY,
+      lovableKey: LOVABLE_API_KEY, elevenKey: ELEVENLABS_API_KEY, openaiKey: OPENAI_API_KEY,
     }).catch((e) => {
       console.error("session crashed:", e);
       try { socket.close(1011, "session-error"); } catch { /* */ }
