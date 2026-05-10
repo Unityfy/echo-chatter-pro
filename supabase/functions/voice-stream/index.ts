@@ -522,25 +522,50 @@ async function streamTts(opts: {
   }
 }
 
-// ─── LLM call (Lovable AI Gateway, streaming) ──────────────────────────────
+// ─── LLM call (OpenAI GPT-4.1 OR Lovable AI Gateway, streaming) ───────────
+
+type LlmProvider = "openai" | "lovable";
+
+interface LlmUsage { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+
+/** Resolve which LLM backend + model id to use based on the agent's `model` field.
+ *  Anything that looks like a GPT model routes to OpenAI directly (requires
+ *  OPENAI_API_KEY); everything else goes through the Lovable AI Gateway. */
+function resolveLlm(modelField: string | null | undefined): { provider: LlmProvider; model: string } {
+  const raw = (modelField || "").trim();
+  const lower = raw.toLowerCase();
+  if (lower.startsWith("gpt") || lower.startsWith("openai/") || lower.startsWith("o1") || lower.startsWith("o3")) {
+    // Normalise display labels like "GPT-4.1" → "gpt-4.1", strip "openai/" prefix.
+    const id = raw.replace(/^openai\//i, "").toLowerCase();
+    return { provider: "openai", model: id || "gpt-4.1" };
+  }
+  return { provider: "lovable", model: raw || "google/gemini-3-flash-preview" };
+}
 
 async function streamLlm(opts: {
+  provider: LlmProvider;
   apiKey: string;
   model: string;
   systemPrompt: string;
   history: { role: "user" | "assistant"; content: string }[];
   signal: AbortSignal;
   onSentence: (sentence: string) => void;
-  onComplete: (full: string) => void;
+  onComplete: (full: string, usage: LlmUsage | null) => void;
 }): Promise<void> {
-  const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const isOpenAi = opts.provider === "openai";
+  const endpoint = isOpenAi
+    ? "https://api.openai.com/v1/chat/completions"
+    : "https://ai.gateway.lovable.dev/v1/chat/completions";
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    stream: true,
+    messages: [{ role: "system", content: opts.systemPrompt }, ...opts.history],
+  };
+  if (isOpenAi) body.stream_options = { include_usage: true };
+  const resp = await fetch(endpoint, {
     method: "POST",
     headers: { Authorization: `Bearer ${opts.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: opts.model,
-      stream: true,
-      messages: [{ role: "system", content: opts.systemPrompt }, ...opts.history],
-    }),
+    body: JSON.stringify(body),
     signal: opts.signal,
   });
   if (!resp.ok || !resp.body) {
