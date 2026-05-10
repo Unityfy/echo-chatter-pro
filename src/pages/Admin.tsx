@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Helmet } from "react-helmet-async";
+import { useEffect as _useEffectDoc } from "react";
 import {
   Activity,
   AlertCircle,
