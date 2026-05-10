@@ -227,6 +227,44 @@ export type Database = {
           },
         ]
       }
+      call_messages: {
+        Row: {
+          call_id: string
+          content: string
+          created_at: string
+          id: string
+          latency_ms: number | null
+          metadata: Json
+          role: string
+        }
+        Insert: {
+          call_id: string
+          content?: string
+          created_at?: string
+          id?: string
+          latency_ms?: number | null
+          metadata?: Json
+          role: string
+        }
+        Update: {
+          call_id?: string
+          content?: string
+          created_at?: string
+          id?: string
+          latency_ms?: number | null
+          metadata?: Json
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_messages_call_id_fkey"
+            columns: ["call_id"]
+            isOneToOne: false
+            referencedRelation: "calls"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       calls: {
         Row: {
           agent_id: string | null
@@ -289,6 +327,47 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      integrations: {
+        Row: {
+          config: Json
+          created_at: string
+          created_by: string
+          enabled: boolean
+          id: string
+          team_id: string
+          type: string
+          updated_at: string
+        }
+        Insert: {
+          config?: Json
+          created_at?: string
+          created_by: string
+          enabled?: boolean
+          id?: string
+          team_id: string
+          type: string
+          updated_at?: string
+        }
+        Update: {
+          config?: Json
+          created_at?: string
+          created_by?: string
+          enabled?: boolean
+          id?: string
+          team_id?: string
+          type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "integrations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       knowledge_bases: {
         Row: {
@@ -626,7 +705,7 @@ export type Database = {
       }
     }
     Enums: {
-      agent_status: "active" | "draft" | "paused" | "archived"
+      agent_status: "active" | "draft" | "paused" | "archived" | "inactive"
       team_role: "admin" | "member" | "viewer"
     }
     CompositeTypes: {
@@ -755,7 +834,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      agent_status: ["active", "draft", "paused", "archived"],
+      agent_status: ["active", "draft", "paused", "archived", "inactive"],
       team_role: ["admin", "member", "viewer"],
     },
   },
