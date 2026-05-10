@@ -41,7 +41,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 // ════════════════════════════════════════════════════════════════════════════
 
 /** Add new providers here — the rest of the file adapts automatically. */
-type ProviderName = "exotel" | "twilio" | "plivo";
+type ProviderName = "twilio" | "plivo";
 
 interface ProviderAdapter {
   name: ProviderName;
@@ -75,51 +75,6 @@ type InboundEvent =
   | { type: "stop" };
 
 // ─── Adapters ──────────────────────────────────────────────────────────────
-
-/** Exotel Voicebot Applet protocol.
- *  Frames: { event: "start"|"media"|"stop"|"mark", stream_sid, media: { payload } } */
-const exotelAdapter: ProviderAdapter = {
-  name: "exotel",
-  audio: { encoding: "mulaw", sampleRate: 8000 },
-  parseInbound(raw) {
-    try {
-      const msg = JSON.parse(raw);
-      const ev = msg.event;
-      if (ev === "start") {
-        return { type: "start", sessionId: msg.stream_sid ?? msg.streamSid ?? "" };
-      }
-      if (ev === "media") {
-        const payload = msg.media?.payload;
-        if (typeof payload === "string") return { type: "audio", mulawB64: payload };
-        return null;
-      }
-      if (ev === "mark") {
-        return { type: "mark", name: msg.mark?.name ?? "" };
-      }
-      if (ev === "stop") return { type: "stop" };
-      return null; // dtmf / connected / unknown — ignored
-    } catch {
-      return null;
-    }
-  },
-  formatOutboundAudio(sessionId, mulawB64) {
-    return JSON.stringify({
-      event: "media",
-      stream_sid: sessionId,
-      media: { payload: mulawB64 },
-    });
-  },
-  formatClear(sessionId) {
-    return JSON.stringify({ event: "clear", stream_sid: sessionId });
-  },
-  formatMark(sessionId, markName) {
-    return JSON.stringify({
-      event: "mark",
-      stream_sid: sessionId,
-      mark: { name: markName },
-    });
-  },
-};
 
 /** Twilio Media Streams protocol (stub, ready to use).
  *  Frames: { event: "connected"|"start"|"media"|"mark"|"stop",
@@ -205,7 +160,6 @@ const plivoAdapter: ProviderAdapter = {
 };
 
 const PROVIDERS: Record<ProviderName, ProviderAdapter> = {
-  exotel: exotelAdapter,
   twilio: twilioAdapter,
   plivo: plivoAdapter,
 };
@@ -948,7 +902,7 @@ Deno.serve(async (req) => {
     return new Response("Expected WebSocket upgrade", { status: 426 });
   }
 
-  const providerNameRaw = url.searchParams.get("provider") ?? "exotel";
+  const providerNameRaw = url.searchParams.get("provider") ?? "twilio";
   const agentId = url.searchParams.get("agent_id") ?? "";
   const callSid = url.searchParams.get("call_sid") ?? "";
 

@@ -16,7 +16,7 @@ Deno.serve(async (req) => {
 
   const startedAt = Date.now();
   const url = new URL(req.url);
-  const providerId = url.searchParams.get("provider") || "exotel";
+  const providerId = url.searchParams.get("provider") || "twilio";
   const token = url.searchParams.get("token");
 
   let provider;
@@ -64,14 +64,7 @@ Deno.serve(async (req) => {
     // Token → workspace lookup. For Twilio we resolve the workspace via the
     // called number directly (the Twilio account belongs to the workspace owner).
     let teamId: string | null = null;
-    if (provider.id === "exotel") {
-      const { data: acct } = await admin
-        .from("exotel_accounts")
-        .select("team_id")
-        .eq("webhook_token", token)
-        .maybeSingle();
-      teamId = acct?.team_id ?? null;
-    } else if (provider.id === "twilio" && call.to_number) {
+    if (provider.id === "twilio" && call.to_number) {
       const candidates = [call.to_number, call.to_number.replace(/^\+/, ""), `+${call.to_number.replace(/^\+/, "")}`];
       const { data: pnRow } = await admin
         .from("phone_numbers")

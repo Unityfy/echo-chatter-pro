@@ -1,11 +1,8 @@
-import { useState, useEffect } from "react";
-import { Plug, ExternalLink, CheckCircle2, Loader2 } from "lucide-react";
+import { Plug, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { supabase } from "@/integrations/supabase/client";
-import ExotelConnectDialog from "@/components/exotel/ExotelConnectDialog";
 
 const staticIntegrations = [
+  { name: "Twilio", desc: "Connect your Twilio number to your voice agent.", connected: true },
   { name: "HubSpot", desc: "Sync contacts and deals with your CRM.", connected: false },
   { name: "Google Calendar", desc: "Create events from booking conversations.", connected: false },
   { name: "Slack", desc: "Receive real-time notifications in channels.", connected: true },
@@ -15,23 +12,6 @@ const staticIntegrations = [
 ];
 
 const Integrations = () => {
-  const [exotelOpen, setExotelOpen] = useState(false);
-  const [exotelConnected, setExotelConnected] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    checkExotel();
-  }, []);
-
-  const checkExotel = async () => {
-    setLoading(true);
-    const { data } = await supabase.functions.invoke("exotel-connect", {
-      body: { action: "status" },
-    });
-    setExotelConnected(((data as any)?.accounts ?? []).length > 0);
-    setLoading(false);
-  };
-
   return (
     <div className="space-y-6">
       <div>
@@ -40,30 +20,6 @@ const Integrations = () => {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {/* Exotel card */}
-        <div className="rounded-xl border border-border bg-card p-5 space-y-3 hover:border-primary/30 transition-colors">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted">
-                <Plug className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <span className="font-medium text-foreground">Exotel</span>
-            </div>
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            ) : exotelConnected ? (
-              <Badge variant="secondary" className="gap-1">
-                <CheckCircle2 className="h-3 w-3" /> Connected
-              </Badge>
-            ) : null}
-          </div>
-          <p className="text-sm text-muted-foreground">Connect your Exotel account to import and manage phone numbers.</p>
-          <Button variant="outline" size="sm" className="w-full" onClick={() => setExotelOpen(true)}>
-            {exotelConnected ? "Manage" : "Connect"}
-            <ExternalLink className="h-3 w-3" />
-          </Button>
-        </div>
-
         {staticIntegrations.map((item) => (
           <div
             key={item.name}
@@ -90,8 +46,6 @@ const Integrations = () => {
           </div>
         ))}
       </div>
-
-      <ExotelConnectDialog open={exotelOpen} onOpenChange={setExotelOpen} onImported={checkExotel} />
     </div>
   );
 };
