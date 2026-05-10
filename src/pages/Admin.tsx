@@ -108,6 +108,10 @@ export default function Admin() {
   };
 
   useEffect(() => {
+    document.title = "Admin — VoxAgent";
+  }, []);
+
+  useEffect(() => {
     if (teamId) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teamId]);
