@@ -344,14 +344,27 @@ async function endCallLog(
   callId: string,
   startedAtMs: number,
   status: string,
+  metrics?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    avg_latency_ms?: number | null;
+    p95_latency_ms?: number | null;
+    turns?: number;
+    llm_provider?: string;
+    llm_model?: string;
+  },
 ) {
   const ended = new Date();
+  const { data: existing } = await supabase.from("calls").select("metadata").eq("id", callId).maybeSingle();
+  const meta = (existing?.metadata ?? {}) as Record<string, unknown>;
+  const merged = metrics ? { ...meta, metrics: { ...(meta.metrics as object ?? {}), ...metrics } } : meta;
   await supabase
     .from("calls")
     .update({
       status,
       ended_at: ended.toISOString(),
       duration_seconds: Math.round((ended.getTime() - startedAtMs) / 1000),
+      metadata: merged,
     })
     .eq("id", callId);
 }
