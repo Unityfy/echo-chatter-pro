@@ -685,6 +685,27 @@ async function runSession(opts: {
     }
   };
 
+  // Helper: insert a row into call_messages (best-effort, never throws).
+  const logMessage = (
+    role: "user" | "assistant" | "system",
+    content: string,
+    extra: { latency_ms?: number; metadata?: Record<string, unknown> } = {},
+  ) => {
+    if (!callId) return;
+    supabase.from("call_messages").insert({
+      call_id: callId,
+      role,
+      content,
+      latency_ms: extra.latency_ms ?? null,
+      metadata: extra.metadata ?? {},
+    }).then(({ error }) => {
+      if (error) console.error("call_messages insert failed:", error.message);
+    });
+  };
+
+  // Track when we got the user's final transcript (start of agent's turn budget).
+  let turnStartAt = 0;
+
   /** Cancel the in-flight agent turn. Idempotent within a single turn. */
   const cancelAgentTurn = (reason: string) => {
     if (!agentSpeaking) return;
@@ -703,6 +724,7 @@ async function runSession(opts: {
     if (assistantPartial.trim()) {
       const partial = assistantPartial.trim();
       history.push({ role: "assistant", content: `${partial} [interrupted]` });
+      logMessage("assistant", partial, { metadata: { interrupted: true } });
       if (callId) {
         supabase.from("calls").select("metadata").eq("id", callId).maybeSingle()
           .then(({ data }) =>
@@ -716,7 +738,9 @@ async function runSession(opts: {
   };
 
   const speakAndAdvance = async (userText: string) => {
+    turnStartAt = Date.now();
     history.push({ role: "user", content: userText });
+    logMessage("user", userText);
     if (callId) {
       try {
         const { data } = await supabase.from("calls").select("metadata").eq("id", callId).maybeSingle();
@@ -734,10 +758,13 @@ async function runSession(opts: {
     const mySeq = turnSeq;       // capture for stale-chunk guard
 
     let assistantBuf = "";
+    let firstAudioAt = 0;
+    let turnUsage: LlmUsage | null = null;
     try {
       await streamLlm({
-        apiKey: lovableKey,
-        model,
+        provider: llmProvider,
+        apiKey: llmKey,
+        model: llmModel,
         systemPrompt,
         history,
         signal: llmAbort.signal,
@@ -750,13 +777,16 @@ async function runSession(opts: {
               text: sentence,
               voiceId,
               signal: ttsAbort!.signal,
-              onChunk: (mulaw) => sendAudioToCaller(mulaw, mySeq),
+              onChunk: (mulaw) => {
+                if (!firstAudioAt) firstAudioAt = Date.now();
+                sendAudioToCaller(mulaw, mySeq);
+              },
             });
           } catch (e) {
             if ((e as Error).name !== "AbortError") console.error("TTS chunk error:", e);
           }
         },
-        onComplete: (full) => { assistantBuf = full; },
+        onComplete: (full, usage) => { assistantBuf = full; turnUsage = usage; },
       });
     } catch (e) {
       if ((e as Error).name !== "AbortError") console.error("LLM stream error:", e);
@@ -764,6 +794,20 @@ async function runSession(opts: {
 
     // If we completed without barge-in, persist the full assistant turn.
     if (mySeq === turnSeq && assistantBuf) {
+      const latency = firstAudioAt ? firstAudioAt - turnStartAt : null;
+      if (latency != null) turnLatencies.push(latency);
+      if (turnUsage) {
+        totalPromptTokens += turnUsage.prompt_tokens;
+        totalCompletionTokens += turnUsage.completion_tokens;
+      }
+      logMessage("assistant", assistantBuf, {
+        latency_ms: latency ?? undefined,
+        metadata: {
+          llm_provider: llmProvider,
+          llm_model: llmModel,
+          ...(turnUsage ? { usage: turnUsage } : {}),
+        },
+      });
       history.push({ role: "assistant", content: assistantBuf });
       if (callId) {
         try {
