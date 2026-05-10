@@ -9,3 +9,7 @@ verify_jwt = false
 # Authenticated by call_sid lookup + agent ownership scoping in code.
 [functions.voice-stream]
 verify_jwt = false
+
+# Public health probe — no PII returned, only status flags.
+[functions.elevenlabs-token-check]
+verify_jwt = false
