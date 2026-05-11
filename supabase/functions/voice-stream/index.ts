@@ -1034,10 +1034,14 @@ async function runSession(opts: {
             if ((e as Error).name !== "AbortError") console.error("TTS chunk error:", e);
           }
         },
-        onComplete: (full, usage) => { assistantBuf = full; turnUsage = usage; },
+        onComplete: (full, usage) => {
+          assistantBuf = full;
+          turnUsage = usage;
+          console.log(`[llm] response (${full.length} chars)${usage ? ` usage=${usage.prompt_tokens}/${usage.completion_tokens}` : ""}: "${full.slice(0, 120)}${full.length > 120 ? "…" : ""}"`);
+        },
       });
     } catch (e) {
-      if ((e as Error).name !== "AbortError") console.error("LLM stream error:", e);
+      if ((e as Error).name !== "AbortError") console.error("[llm] stream error:", e);
     }
 
     // If we completed without barge-in, persist the full assistant turn.
