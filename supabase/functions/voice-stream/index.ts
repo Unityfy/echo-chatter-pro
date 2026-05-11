@@ -646,10 +646,15 @@ function openSttSession(opts: {
       try {
         const msg = JSON.parse(typeof ev.data === "string" ? ev.data : "");
         if (msg.type === "partial_transcript") {
+          const t = (msg.text ?? "").trim();
+          if (t) console.log(`[stt] partial: "${t}"`);
           opts.onPartial?.(msg.text ?? "");
         } else if (msg.type === "committed_transcript") {
           const text = (msg.text ?? "").trim();
-          if (text) opts.onFinal(text);
+          if (text) {
+            console.log(`[stt] final: "${text}"`);
+            opts.onFinal(text);
+          }
         } else if (msg.type === "error") {
           console.error("STT error event:", msg);
           opts.onError?.(msg);
