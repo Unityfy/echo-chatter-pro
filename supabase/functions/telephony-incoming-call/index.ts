@@ -80,9 +80,28 @@ Deno.serve(async (req) => {
     // Provider parses its own payload shape
     const call = provider.parseIncomingWebhook(req, payload);
 
-    if (!call.to_number) {
+    // Normalize the called number to E.164 (best-effort) and build candidate variants for DB lookup.
+    const rawTo = call.to_number ?? payload.To ?? payload.Called ?? null;
+    const digits = rawTo ? rawTo.replace(/[^\d]/g, "") : "";
+    const normalizedTo = digits ? `+${digits}` : null;
+    const candidates = normalizedTo
+      ? Array.from(new Set([rawTo!, normalizedTo, digits, `+${digits}`]))
+      : [];
+
+    console.log(`[${provider.id}] incoming call`, {
+      raw_to: rawTo,
+      normalized_to: normalizedTo,
+      from: call.from_number,
+      call_sid: call.call_sid,
+      candidates,
+    });
+
+    if (!normalizedTo) {
+      console.warn(`[${provider.id}] missing To in payload`, { payload_keys: Object.keys(payload) });
       return provider.renderControlResponse({ kind: "say_hangup", message: "Sorry, we could not determine the number called. Goodbye." });
     }
+    // Overwrite with normalized form so downstream logging/inserts are consistent.
+    call.to_number = normalizedTo;
 
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
     const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -91,30 +110,36 @@ Deno.serve(async (req) => {
     // Token → workspace lookup. For Twilio we resolve the workspace via the
     // called number directly (the Twilio account belongs to the workspace owner).
     let teamId: string | null = null;
-    if (provider.id === "twilio" && call.to_number) {
-      const candidates = [call.to_number, call.to_number.replace(/^\+/, ""), `+${call.to_number.replace(/^\+/, "")}`];
+    if (provider.id === "twilio") {
       const { data: pnRow } = await admin
         .from("phone_numbers")
-        .select("team_id")
+        .select("team_id, phone_number")
         .eq("provider", "twilio")
         .in("phone_number", candidates)
         .maybeSingle();
       teamId = pnRow?.team_id ?? null;
+      console.log(`[${provider.id}] workspace lookup`, { matched_db_number: pnRow?.phone_number ?? null, team_id: teamId });
     }
     // TODO: knowlarity_accounts lookup once that table exists.
 
     if (!teamId) {
+      console.warn(`[${provider.id}] no workspace for number`, { normalized_to: normalizedTo });
       return provider.renderControlResponse({ kind: "say_hangup", message: "This service is not configured. Goodbye." });
     }
 
     // Resolve number → agent
-    const candidates = [call.to_number, call.to_number.replace(/^\+/, ""), `+${call.to_number.replace(/^\+/, "")}`];
     const { data: pn } = await admin
       .from("phone_numbers")
-      .select("id, agent_id")
+      .select("id, agent_id, phone_number")
       .eq("team_id", teamId)
       .in("phone_number", candidates)
       .maybeSingle();
+
+    console.log(`[${provider.id}] number → agent`, {
+      matched_db_number: pn?.phone_number ?? null,
+      phone_number_id: pn?.id ?? null,
+      agent_id: pn?.agent_id ?? null,
+    });
 
     const logCall = async (extra: Record<string, unknown>) => {
       try {
