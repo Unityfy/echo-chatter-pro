@@ -47,6 +47,11 @@ interface Health {
 
 const db = supabase as any;
 
+function normalizeE164(value: string) {
+  const digits = value.replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
+}
+
 async function callTwilioMgmt(action: string, payload: Record<string, unknown> = {}) {
   const { data, error } = await supabase.functions.invoke("twilio-management", {
     body: { action, ...payload },
@@ -119,19 +124,31 @@ export default function PhoneNumbers() {
 
   const handleAdd = async () => {
     if (!teamId) return toast.error("No active workspace");
-    const phone = newNumber.trim();
+    const phone = normalizeE164(newNumber);
     if (!phone) return toast.error("Enter a phone number");
     setAdding(true);
-    const { error } = await db.from("phone_numbers").insert({
-      team_id: teamId,
-      phone_number: phone,
-      provider: "twilio",
-      status: "active",
-      agent_id: newAgent === "none" ? null : newAgent,
-    });
+    const assignment = newAgent === "none" ? null : newAgent;
+    const { data: existing, error: lookupError } = await db
+      .from("phone_numbers")
+      .select("id")
+      .eq("provider", "twilio")
+      .eq("phone_number", phone)
+      .maybeSingle();
+
+    const { error } = lookupError
+      ? { error: lookupError }
+      : existing?.id
+        ? await db.from("phone_numbers").update({ status: "active", agent_id: assignment }).eq("id", existing.id)
+        : await db.from("phone_numbers").insert({
+            team_id: teamId,
+            phone_number: phone,
+            provider: "twilio",
+            status: "active",
+            agent_id: assignment,
+          });
     setAdding(false);
     if (error) return toast.error(error.message);
-    toast.success("Number added");
+    toast.success(existing?.id ? "Number updated" : "Number added");
     setAddOpen(false);
     setNewNumber("");
     setNewAgent("none");
