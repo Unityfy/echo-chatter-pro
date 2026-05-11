@@ -149,6 +149,34 @@ Deno.serve(async (req) => {
         });
       }
 
+      case "add-number": {
+        if (!teamId) return json({ error: "team_id required" }, 400);
+        const phone = normalizeE164(String(body.phone_number || ""));
+        if (!phone) return json({ error: "phone_number required" }, 400);
+
+        const { data: existing, error: lookupError } = await admin
+          .from("phone_numbers")
+          .select("id")
+          .eq("provider", "twilio")
+          .eq("phone_number", phone)
+          .maybeSingle();
+        if (lookupError) return json({ error: lookupError.message }, 500);
+
+        const payload = {
+          team_id: teamId,
+          phone_number: phone,
+          provider: "twilio",
+          status: "active",
+          agent_id: body.agent_id || null,
+        };
+        const query = existing?.id
+          ? admin.from("phone_numbers").update(payload).eq("id", existing.id)
+          : admin.from("phone_numbers").insert(payload);
+        const { data: row, error } = await query.select().single();
+        if (error) return json({ error: error.message }, 500);
+        return json({ number: row, updated: !!existing?.id });
+      }
+
       case "purchase-number": {
         if (!teamId) return json({ error: "team_id required" }, 400);
         const phone = normalizeE164(String(body.phone_number || ""));
