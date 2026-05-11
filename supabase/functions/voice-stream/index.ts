@@ -709,12 +709,19 @@ async function streamTts(opts: {
     throw new Error(`TTS failed ${resp.status}: ${err}`);
   }
   const reader = resp.body.getReader();
+  let bytes = 0;
+  let chunks = 0;
   while (true) {
     if (opts.signal.aborted) break;
     const { value, done } = await reader.read();
     if (done) break;
-    if (value && value.length > 0) opts.onChunk(value);
+    if (value && value.length > 0) {
+      bytes += value.length;
+      chunks++;
+      opts.onChunk(value);
+    }
   }
+  console.log(`[tts] generated ${chunks} chunks (${bytes} μ-law bytes) for: "${opts.text.slice(0, 60)}${opts.text.length > 60 ? "…" : ""}"`);
 }
 
 // ─── LLM call (OpenAI GPT-4.1 OR Lovable AI Gateway, streaming) ───────────
