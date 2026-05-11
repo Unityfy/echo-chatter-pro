@@ -1111,14 +1111,12 @@ async function runSession(opts: {
     try { socket.close(1011, "stt-fallback"); } catch { /* */ }
   };
 
-  try {
+  let sttReconnectAttempted = false;
+  const openStt = async (): Promise<void> => {
     stt = await openSttSession({
       apiKey: elevenKey,
       language: mapLanguageToScribe(agent.language),
       onPartial: (text) => {
-        // Early barge-in via STT partials. Ignore very short partials (≤2 chars
-        // are usually noise hallucinations on telephony lines), respect the
-        // post-cancel cooldown, and respect the post-TTS-start grace window.
         if (!agentSpeaking) return;
         const t = (text ?? "").trim();
         if (t.length <= 2) return;
@@ -1129,22 +1127,37 @@ async function runSession(opts: {
       },
       onFinal: (text) => {
         const now = Date.now();
-        if (now - lastFinalAt < 250) return; // debounce duplicate finals
+        if (now - lastFinalAt < 250) return;
         lastFinalAt = now;
         cancelAgentTurn("user final transcript");
         speakAndAdvance(text).catch((e) => console.error("turn error:", e));
       },
-      onError: (err) => {
-        console.error("STT runtime error:", err);
-      },
-      onClose: ({ code, reason, clean }) => {
-        if (!clean && socket.readyState === WebSocket.OPEN && !sttFailed) {
-          triggerFallback(`stt closed code=${code} reason=${reason || "n/a"}`);
+      onError: (err) => { console.error("[stt] runtime error:", err); },
+      onClose: async ({ code, reason, clean }) => {
+        console.log(`[stt] closed code=${code} clean=${clean} reason=${reason || "n/a"}`);
+        if (clean || socket.readyState !== WebSocket.OPEN || sttFailed) return;
+        // One-shot reconnect attempt before falling back.
+        if (!sttReconnectAttempted) {
+          sttReconnectAttempted = true;
+          console.warn("[stt] attempting reconnect…");
+          try {
+            await openStt();
+            console.log("[stt] reconnected");
+            return;
+          } catch (e) {
+            console.error("[stt] reconnect failed:", e);
+          }
         }
+        triggerFallback(`stt closed code=${code} reason=${reason || "n/a"}`);
       },
     });
+  };
+
+  try {
+    await openStt();
+    console.log("[stt] session opened");
   } catch (e) {
-    console.error("STT open failed:", e);
+    console.error("[stt] open failed:", e);
     await triggerFallback(`stt open failed: ${(e as Error).message}`);
     return;
   }
