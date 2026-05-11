@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Bot, Plus, Search, MoreHorizontal, Pencil, Copy, Trash2, Filter,
+  Bot, Plus, Search, MoreHorizontal, Pencil, Copy, Trash2, Filter, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,11 +19,13 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useRBAC } from "@/hooks/useRBAC";
+import { useAuth } from "@/contexts/AuthContext";
+import { useTeamId } from "@/hooks/useTeamId";
+import { supabase } from "@/integrations/supabase/client";
+import { saveAgent, deleteAgent } from "@/services/agentDbService";
 import { toast } from "sonner";
 
-// ─── Types ───────────────────────────────────────────────────────────
-
-type AgentStatus = "active" | "draft" | "paused" | "archived";
+type AgentStatus = "active" | "draft" | "paused" | "archived" | "inactive";
 type AgentType = "sales" | "support" | "booking" | "follow-up" | "custom";
 
 interface Agent {
@@ -39,19 +41,15 @@ interface Agent {
   successRate: number;
 }
 
-// ─── Placeholder Data ────────────────────────────────────────────────
-
-const INITIAL_AGENTS: Agent[] = [];
-
 const LANGUAGES = ["All", "English", "Spanish", "French", "German"];
-const STATUSES: { label: string; value: string }[] = [
+const STATUSES = [
   { label: "All", value: "all" },
   { label: "Active", value: "active" },
   { label: "Draft", value: "draft" },
-  { label: "Paused", value: "paused" },
+  { label: "Inactive", value: "inactive" },
   { label: "Archived", value: "archived" },
 ];
-const TYPES: { label: string; value: string }[] = [
+const TYPES = [
   { label: "All", value: "all" },
   { label: "Sales", value: "sales" },
   { label: "Support", value: "support" },
@@ -60,41 +58,75 @@ const TYPES: { label: string; value: string }[] = [
   { label: "Custom", value: "custom" },
 ];
 
-// ─── Helpers ─────────────────────────────────────────────────────────
-
-const statusConfig: Record<AgentStatus, { variant: "default" | "secondary" | "outline" | "success" | "warning"; className?: string }> = {
+const statusConfig: Record<string, { variant: "default" | "secondary" | "outline" | "success" | "warning" }> = {
   active: { variant: "success" },
   draft: { variant: "secondary" },
   paused: { variant: "warning" },
+  inactive: { variant: "outline" },
   archived: { variant: "outline" },
 };
 
-const typeLabel: Record<AgentType, string> = {
+const typeLabel: Record<string, string> = {
   sales: "Sales", support: "Support", booking: "Booking", "follow-up": "Follow-up", custom: "Custom",
 };
-
-// ─── Component ───────────────────────────────────────────────────────
 
 const Agents = () => {
   const { hasPermission } = useRBAC();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { teamId, loading: teamLoading } = useTeamId();
   const canManage = hasPermission("agents.manage");
 
-  const [agents, setAgents] = useState<Agent[]>(INITIAL_AGENTS);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [languageFilter, setLanguageFilter] = useState("All");
   const [typeFilter, setTypeFilter] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
 
-  // Create form
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [newType, setNewType] = useState<AgentType>("custom");
   const [newLang, setNewLang] = useState("English");
   const [newVoice, setNewVoice] = useState("Nova");
 
-  // Filtered list
+  const fetchAgents = async () => {
+    if (!teamId) return;
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("agents")
+      .select("*")
+      .eq("team_id", teamId)
+      .order("updated_at", { ascending: false });
+    if (error) {
+      toast.error("Failed to load agents");
+      setLoading(false);
+      return;
+    }
+    setAgents(
+      (data || []).map((a: any) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description || "",
+        status: a.status,
+        type: (a.type as AgentType) || "custom",
+        language: a.language || "English",
+        voice: a.voice || "Nova",
+        updatedAt: (a.updated_at || a.created_at)?.slice(0, 10) ?? "",
+        calls: a.calls ?? 0,
+        successRate: Number(a.success_rate ?? 0),
+      })),
+    );
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (teamId) fetchAgents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamId]);
+
   const filtered = agents.filter((a) => {
     if (search && !a.name.toLowerCase().includes(search.toLowerCase())) return false;
     if (statusFilter !== "all" && a.status !== statusFilter) return false;
@@ -103,49 +135,75 @@ const Agents = () => {
     return true;
   });
 
-  const handleCreate = () => {
-    if (!newName.trim()) return;
-    const agent: Agent = {
-      id: crypto.randomUUID(),
-      name: newName.trim(),
-      description: newDesc.trim(),
-      status: "draft",
-      type: newType,
-      language: newLang,
-      voice: newVoice,
-      updatedAt: new Date().toISOString().slice(0, 10),
-      calls: 0,
-      successRate: 0,
-    };
-    setAgents((prev) => [agent, ...prev]);
-    setNewName(""); setNewDesc(""); setNewType("custom"); setNewLang("English"); setNewVoice("Nova");
-    setCreateOpen(false);
-    toast.success(`Agent "${agent.name}" created`);
-    navigate(`/agents/${agent.id}`);
+  const handleCreate = async () => {
+    if (!newName.trim() || !user || !teamId) return;
+    setCreating(true);
+    const id = crypto.randomUUID();
+    try {
+      await saveAgent({
+        id,
+        team_id: teamId,
+        created_by: user.id,
+        name: newName.trim(),
+        description: newDesc.trim(),
+        status: "draft",
+        type: newType,
+        language: newLang,
+        voice: newVoice,
+        model: "GPT-4.1",
+        prompt: "",
+        welcome_mode: "user_first",
+        welcome_message: "",
+      });
+      toast.success(`Agent "${newName.trim()}" created`);
+      setNewName(""); setNewDesc(""); setNewType("custom"); setNewLang("English"); setNewVoice("Nova");
+      setCreateOpen(false);
+      navigate(`/agents/${id}`);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to create agent");
+    } finally {
+      setCreating(false);
+    }
   };
 
-  const handleDuplicate = (agent: Agent) => {
-    const dup: Agent = {
-      ...agent,
-      id: crypto.randomUUID(),
-      name: `${agent.name} (Copy)`,
-      status: "draft",
-      updatedAt: new Date().toISOString().slice(0, 10),
-      calls: 0,
-      successRate: 0,
-    };
-    setAgents((prev) => [dup, ...prev]);
-    toast.success(`Agent duplicated as "${dup.name}"`);
+  const handleDuplicate = async (agent: Agent) => {
+    if (!user || !teamId) return;
+    const id = crypto.randomUUID();
+    try {
+      await saveAgent({
+        id,
+        team_id: teamId,
+        created_by: user.id,
+        name: `${agent.name} (Copy)`,
+        description: agent.description,
+        status: "draft",
+        type: agent.type,
+        language: agent.language,
+        voice: agent.voice,
+        model: "GPT-4.1",
+        prompt: "",
+        welcome_mode: "user_first",
+        welcome_message: "",
+      });
+      toast.success(`Agent duplicated`);
+      fetchAgents();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to duplicate");
+    }
   };
 
-  const handleDelete = (id: string) => {
-    setAgents((prev) => prev.filter((a) => a.id !== id));
-    toast.success("Agent deleted");
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteAgent(id);
+      setAgents((prev) => prev.filter((a) => a.id !== id));
+      toast.success("Agent deleted");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to delete agent");
+    }
   };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-page-title">Agents</h1>
@@ -154,7 +212,7 @@ const Agents = () => {
         {canManage && (
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <Button className="gap-1.5 shrink-0">
+              <Button className="gap-1.5 shrink-0" disabled={!teamId}>
                 <Plus className="h-4 w-4" /> New Agent
               </Button>
             </DialogTrigger>
@@ -209,16 +267,18 @@ const Agents = () => {
               </div>
               <DialogFooter className="pt-2">
                 <DialogClose asChild>
-                  <Button variant="outline">Cancel</Button>
+                  <Button variant="outline" disabled={creating}>Cancel</Button>
                 </DialogClose>
-                <Button onClick={handleCreate} disabled={!newName.trim()}>Create Agent</Button>
+                <Button onClick={handleCreate} disabled={!newName.trim() || creating}>
+                  {creating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Create Agent
+                </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         )}
       </div>
 
-      {/* Filters */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -232,40 +292,31 @@ const Agents = () => {
         <div className="flex items-center gap-2 flex-wrap">
           <Filter className="h-4 w-4 text-muted-foreground hidden sm:block" />
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[120px] h-9 text-xs">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
+            <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Status" /></SelectTrigger>
             <SelectContent>
-              {STATUSES.map((s) => (
-                <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
-              ))}
+              {STATUSES.map((s) => (<SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>))}
             </SelectContent>
           </Select>
           <Select value={languageFilter} onValueChange={setLanguageFilter}>
-            <SelectTrigger className="w-[120px] h-9 text-xs">
-              <SelectValue placeholder="Language" />
-            </SelectTrigger>
+            <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Language" /></SelectTrigger>
             <SelectContent>
-              {LANGUAGES.map((l) => (
-                <SelectItem key={l} value={l}>{l}</SelectItem>
-              ))}
+              {LANGUAGES.map((l) => (<SelectItem key={l} value={l}>{l}</SelectItem>))}
             </SelectContent>
           </Select>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-[120px] h-9 text-xs">
-              <SelectValue placeholder="Type" />
-            </SelectTrigger>
+            <SelectTrigger className="w-[120px] h-9 text-xs"><SelectValue placeholder="Type" /></SelectTrigger>
             <SelectContent>
-              {TYPES.map((t) => (
-                <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-              ))}
+              {TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}
             </SelectContent>
           </Select>
         </div>
       </div>
 
-      {/* Agent Grid */}
-      {filtered.length === 0 ? (
+      {loading || teamLoading ? (
+        <div className="flex justify-center py-16">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : filtered.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center">
             <Bot className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -291,7 +342,6 @@ const Agents = () => {
               onClick={() => navigate(`/agents/${agent.id}`)}
             >
               <CardContent className="p-5 space-y-3">
-                {/* Top row */}
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -299,7 +349,7 @@ const Agents = () => {
                     </div>
                     <div className="min-w-0">
                       <p className="font-medium text-foreground truncate">{agent.name}</p>
-                      <p className="text-helper">{typeLabel[agent.type]}</p>
+                      <p className="text-helper">{typeLabel[agent.type] || "Custom"}</p>
                     </div>
                   </div>
                   {canManage && (
@@ -314,8 +364,8 @@ const Agents = () => {
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => toast.info("Edit coming soon")}>
+                      <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenuItem onClick={() => navigate(`/agents/${agent.id}`)}>
                           <Pencil className="h-3.5 w-3.5 mr-2" /> Edit
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleDuplicate(agent)}>
@@ -333,25 +383,18 @@ const Agents = () => {
                   )}
                 </div>
 
-                {/* Description */}
-                <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed">
-                  {agent.description}
+                <p className="text-sm text-muted-foreground line-clamp-2 leading-relaxed min-h-[2.5rem]">
+                  {agent.description || "No description"}
                 </p>
 
-                {/* Meta row */}
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <Badge variant={statusConfig[agent.status].variant} className="text-[10px] px-1.5 py-0">
+                  <Badge variant={statusConfig[agent.status]?.variant || "outline"} className="text-[10px] px-1.5 py-0">
                     {agent.status}
                   </Badge>
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                    {agent.language}
-                  </Badge>
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                    {agent.voice}
-                  </Badge>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">{agent.language}</Badge>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">{agent.voice}</Badge>
                 </div>
 
-                {/* Stats row */}
                 <div className="flex items-center justify-between pt-1 border-t border-border">
                   <div className="flex items-center gap-4">
                     <div>
