@@ -646,10 +646,15 @@ function openSttSession(opts: {
       try {
         const msg = JSON.parse(typeof ev.data === "string" ? ev.data : "");
         if (msg.type === "partial_transcript") {
+          const t = (msg.text ?? "").trim();
+          if (t) console.log(`[stt] partial: "${t}"`);
           opts.onPartial?.(msg.text ?? "");
         } else if (msg.type === "committed_transcript") {
           const text = (msg.text ?? "").trim();
-          if (text) opts.onFinal(text);
+          if (text) {
+            console.log(`[stt] final: "${text}"`);
+            opts.onFinal(text);
+          }
         } else if (msg.type === "error") {
           console.error("STT error event:", msg);
           opts.onError?.(msg);
@@ -704,12 +709,19 @@ async function streamTts(opts: {
     throw new Error(`TTS failed ${resp.status}: ${err}`);
   }
   const reader = resp.body.getReader();
+  let bytes = 0;
+  let chunks = 0;
   while (true) {
     if (opts.signal.aborted) break;
     const { value, done } = await reader.read();
     if (done) break;
-    if (value && value.length > 0) opts.onChunk(value);
+    if (value && value.length > 0) {
+      bytes += value.length;
+      chunks++;
+      opts.onChunk(value);
+    }
   }
+  console.log(`[tts] generated ${chunks} chunks (${bytes} μ-law bytes) for: "${opts.text.slice(0, 60)}${opts.text.length > 60 ? "…" : ""}"`);
 }
 
 // ─── LLM call (OpenAI GPT-4.1 OR Lovable AI Gateway, streaming) ───────────
@@ -1022,10 +1034,14 @@ async function runSession(opts: {
             if ((e as Error).name !== "AbortError") console.error("TTS chunk error:", e);
           }
         },
-        onComplete: (full, usage) => { assistantBuf = full; turnUsage = usage; },
+        onComplete: (full, usage) => {
+          assistantBuf = full;
+          turnUsage = usage;
+          console.log(`[llm] response (${full.length} chars)${usage ? ` usage=${usage.prompt_tokens}/${usage.completion_tokens}` : ""}: "${full.slice(0, 120)}${full.length > 120 ? "…" : ""}"`);
+        },
       });
     } catch (e) {
-      if ((e as Error).name !== "AbortError") console.error("LLM stream error:", e);
+      if ((e as Error).name !== "AbortError") console.error("[llm] stream error:", e);
     }
 
     // If we completed without barge-in, persist the full assistant turn.
@@ -1095,14 +1111,12 @@ async function runSession(opts: {
     try { socket.close(1011, "stt-fallback"); } catch { /* */ }
   };
 
-  try {
+  let sttReconnectAttempted = false;
+  const openStt = async (): Promise<void> => {
     stt = await openSttSession({
       apiKey: elevenKey,
       language: mapLanguageToScribe(agent.language),
       onPartial: (text) => {
-        // Early barge-in via STT partials. Ignore very short partials (≤2 chars
-        // are usually noise hallucinations on telephony lines), respect the
-        // post-cancel cooldown, and respect the post-TTS-start grace window.
         if (!agentSpeaking) return;
         const t = (text ?? "").trim();
         if (t.length <= 2) return;
@@ -1113,22 +1127,37 @@ async function runSession(opts: {
       },
       onFinal: (text) => {
         const now = Date.now();
-        if (now - lastFinalAt < 250) return; // debounce duplicate finals
+        if (now - lastFinalAt < 250) return;
         lastFinalAt = now;
         cancelAgentTurn("user final transcript");
         speakAndAdvance(text).catch((e) => console.error("turn error:", e));
       },
-      onError: (err) => {
-        console.error("STT runtime error:", err);
-      },
-      onClose: ({ code, reason, clean }) => {
-        if (!clean && socket.readyState === WebSocket.OPEN && !sttFailed) {
-          triggerFallback(`stt closed code=${code} reason=${reason || "n/a"}`);
+      onError: (err) => { console.error("[stt] runtime error:", err); },
+      onClose: async ({ code, reason, clean }) => {
+        console.log(`[stt] closed code=${code} clean=${clean} reason=${reason || "n/a"}`);
+        if (clean || socket.readyState !== WebSocket.OPEN || sttFailed) return;
+        // One-shot reconnect attempt before falling back.
+        if (!sttReconnectAttempted) {
+          sttReconnectAttempted = true;
+          console.warn("[stt] attempting reconnect…");
+          try {
+            await openStt();
+            console.log("[stt] reconnected");
+            return;
+          } catch (e) {
+            console.error("[stt] reconnect failed:", e);
+          }
         }
+        triggerFallback(`stt closed code=${code} reason=${reason || "n/a"}`);
       },
     });
+  };
+
+  try {
+    await openStt();
+    console.log("[stt] session opened");
   } catch (e) {
-    console.error("STT open failed:", e);
+    console.error("[stt] open failed:", e);
     await triggerFallback(`stt open failed: ${(e as Error).message}`);
     return;
   }
@@ -1154,11 +1183,11 @@ async function runSession(opts: {
 
     if (event.type === "start") {
       sessionId = event.sessionId;
-      console.log(`[${provider.name}] stream started sid=${sessionId} agent=${agent.id}`);
+      console.log(`[${provider.name}] stream connected sid=${sessionId} agent=${agent.id} call=${callId ?? "n/a"}`);
       return;
     }
     if (event.type === "stop") {
-      console.log(`[${provider.name}] stream stopped`);
+      console.log(`[${provider.name}] stream stopped sid=${sessionId}`);
       socket.close(1000, "provider-stop");
       return;
     }
