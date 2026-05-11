@@ -840,14 +840,7 @@ async function runSession(opts: {
   const systemPrompt =
     (agent.prompt && agent.prompt.trim()) ||
     "You are a helpful AI voice agent. Keep replies short and conversational — they will be spoken aloud.";
-  // agent.voice may be a friendly name (e.g. "Nova") or a raw ElevenLabs voice id.
-  const VOICE_NAME_TO_ID: Record<string, string> = {
-    Nova: "EXAVITQu4vr4xnSDxMaL", Onyx: "JBFqnCBsd6RMkjVDRZzb", Shimmer: "pFZP5JQG7iQjIQuC4Bku",
-    Echo: "cjVigY5qzO86Huf0OWal", Alloy: "Xb7hH8MSUJpSbSDYk0k2", Fable: "onwK4e9ZLuTAKqWW03F9",
-    Neha: "8baRIHZEGj62eS9YHzC6", Roopa: "8i52rsySWGYoU4SRQCex",
-    Sumeet: "X2jQeFZFwKyCkPx2OHSL", Ankush: "7c9GbBg3PCOqyDlCoB3z",
-  };
-  const voiceId = (agent.voice && VOICE_NAME_TO_ID[agent.voice]) || agent.voice || "EXAVITQu4vr4xnSDxMaL";
+  const voiceId = agent.voice || "EXAVITQu4vr4xnSDxMaL";
   const llm = resolveLlm(agent.model);
   // If agent is configured for OpenAI but the key is missing, fall back to gateway.
   const llmProvider: LlmProvider = llm.provider === "openai" && !openaiKey ? "lovable" : llm.provider;
