@@ -38,6 +38,11 @@ function statusCallbackUrl(): string {
   return `${base}/functions/v1/telephony-status-callback?provider=twilio`;
 }
 
+function normalizeE164(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -144,9 +149,37 @@ Deno.serve(async (req) => {
         });
       }
 
+      case "add-number": {
+        if (!teamId) return json({ error: "team_id required" }, 400);
+        const phone = normalizeE164(String(body.phone_number || ""));
+        if (!phone) return json({ error: "phone_number required" }, 400);
+
+        const { data: existing, error: lookupError } = await admin
+          .from("phone_numbers")
+          .select("id")
+          .eq("provider", "twilio")
+          .eq("phone_number", phone)
+          .maybeSingle();
+        if (lookupError) return json({ error: lookupError.message }, 500);
+
+        const payload = {
+          team_id: teamId,
+          phone_number: phone,
+          provider: "twilio",
+          status: "active",
+          agent_id: body.agent_id || null,
+        };
+        const query = existing?.id
+          ? admin.from("phone_numbers").update(payload).eq("id", existing.id)
+          : admin.from("phone_numbers").insert(payload);
+        const { data: row, error } = await query.select().single();
+        if (error) return json({ error: error.message }, 500);
+        return json({ number: row, updated: !!existing?.id });
+      }
+
       case "purchase-number": {
         if (!teamId) return json({ error: "team_id required" }, 400);
-        const phone = String(body.phone_number || "");
+        const phone = normalizeE164(String(body.phone_number || ""));
         if (!phone) return json({ error: "phone_number required" }, 400);
         const form = new URLSearchParams();
         form.set("PhoneNumber", phone);
@@ -161,15 +194,20 @@ Deno.serve(async (req) => {
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) return json({ error: `Twilio purchase error (${r.status}): ${data?.message || ""}` }, r.status);
-        // Insert into phone_numbers
-        const { data: row, error } = await admin.from("phone_numbers").insert({
+        // Sync into phone_numbers. If the number already exists, keep routing intact
+        // unless a new agent_id is explicitly provided.
+        const rowPayload: Record<string, unknown> = {
           team_id: teamId,
-          phone_number: data.phone_number,
+          phone_number: normalizeE164(data.phone_number || phone),
           provider: "twilio",
           provider_number_id: data.sid,
           status: "active",
-          agent_id: body.agent_id || null,
-        }).select().single();
+        };
+        if (body.agent_id) rowPayload.agent_id = body.agent_id;
+        const { data: row, error } = await admin.from("phone_numbers")
+          .upsert(rowPayload, { onConflict: "provider,phone_number" })
+          .select()
+          .single();
         if (error) return json({ error: error.message }, 500);
         return json({ number: row, twilio: data });
       }
@@ -186,27 +224,21 @@ Deno.serve(async (req) => {
         const sids = body.sids as string[] | undefined;
         const filtered = sids?.length ? list.filter((n) => sids.includes(n.sid)) : list;
 
-        const { data: existing } = await admin
-          .from("phone_numbers")
-          .select("phone_number, provider_number_id")
-          .eq("team_id", teamId)
-          .eq("provider", "twilio");
-        const existingSet = new Set((existing || []).map((e: any) => e.provider_number_id || e.phone_number));
-
-        const toInsert = filtered
-          .filter((n) => !existingSet.has(n.sid) && !existingSet.has(n.phone_number))
-          .map((n) => ({
+        const toUpsert = filtered.map((n) => {
+          const row: Record<string, unknown> = {
             team_id: teamId,
-            phone_number: n.phone_number,
+            phone_number: normalizeE164(n.phone_number),
             provider: "twilio",
             provider_number_id: n.sid,
             status: "active",
-            agent_id: body.agent_id || null,
-          }));
-        if (toInsert.length === 0) return json({ imported: 0, skipped: filtered.length });
-        const { error } = await admin.from("phone_numbers").insert(toInsert);
+          };
+          if (body.agent_id) row.agent_id = body.agent_id;
+          return row;
+        });
+        if (toUpsert.length === 0) return json({ imported: 0, skipped: 0 });
+        const { error } = await admin.from("phone_numbers").upsert(toUpsert, { onConflict: "provider,phone_number" });
         if (error) return json({ error: error.message }, 500);
-        return json({ imported: toInsert.length, skipped: filtered.length - toInsert.length });
+        return json({ imported: toUpsert.length, skipped: 0 });
       }
 
       case "configure-webhook": {
