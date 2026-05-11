@@ -196,27 +196,21 @@ Deno.serve(async (req) => {
         const sids = body.sids as string[] | undefined;
         const filtered = sids?.length ? list.filter((n) => sids.includes(n.sid)) : list;
 
-        const { data: existing } = await admin
-          .from("phone_numbers")
-          .select("phone_number, provider_number_id")
-          .eq("team_id", teamId)
-          .eq("provider", "twilio");
-        const existingSet = new Set((existing || []).map((e: any) => e.provider_number_id || e.phone_number));
-
-        const toInsert = filtered
-          .filter((n) => !existingSet.has(n.sid) && !existingSet.has(n.phone_number))
-          .map((n) => ({
+        const toUpsert = filtered.map((n) => {
+          const row: Record<string, unknown> = {
             team_id: teamId,
-            phone_number: n.phone_number,
+            phone_number: normalizeE164(n.phone_number),
             provider: "twilio",
             provider_number_id: n.sid,
             status: "active",
-            agent_id: body.agent_id || null,
-          }));
-        if (toInsert.length === 0) return json({ imported: 0, skipped: filtered.length });
-        const { error } = await admin.from("phone_numbers").insert(toInsert);
+          };
+          if (body.agent_id) row.agent_id = body.agent_id;
+          return row;
+        });
+        if (toUpsert.length === 0) return json({ imported: 0, skipped: 0 });
+        const { error } = await admin.from("phone_numbers").upsert(toUpsert, { onConflict: "provider,phone_number" });
         if (error) return json({ error: error.message }, 500);
-        return json({ imported: toInsert.length, skipped: filtered.length - toInsert.length });
+        return json({ imported: toUpsert.length, skipped: 0 });
       }
 
       case "configure-webhook": {
