@@ -127,32 +127,22 @@ export default function PhoneNumbers() {
     const phone = normalizeE164(newNumber);
     if (!phone) return toast.error("Enter a phone number");
     setAdding(true);
-    const assignment = newAgent === "none" ? null : newAgent;
-    const { data: existing, error: lookupError } = await db
-      .from("phone_numbers")
-      .select("id")
-      .eq("provider", "twilio")
-      .eq("phone_number", phone)
-      .maybeSingle();
-
-    const { error } = lookupError
-      ? { error: lookupError }
-      : existing?.id
-        ? await db.from("phone_numbers").update({ status: "active", agent_id: assignment }).eq("id", existing.id)
-        : await db.from("phone_numbers").insert({
-            team_id: teamId,
-            phone_number: phone,
-            provider: "twilio",
-            status: "active",
-            agent_id: assignment,
-          });
-    setAdding(false);
-    if (error) return toast.error(error.message);
-    toast.success(existing?.id ? "Number updated" : "Number added");
-    setAddOpen(false);
-    setNewNumber("");
-    setNewAgent("none");
-    load();
+    try {
+      const result = await callTwilioMgmt("add-number", {
+        team_id: teamId,
+        phone_number: phone,
+        agent_id: newAgent === "none" ? null : newAgent,
+      });
+      toast.success(result?.updated ? "Number updated" : "Number added");
+      setAddOpen(false);
+      setNewNumber("");
+      setNewAgent("none");
+      load();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally {
+      setAdding(false);
+    }
   };
 
   const handleAssign = async () => {
