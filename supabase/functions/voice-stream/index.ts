@@ -1170,11 +1170,11 @@ async function runSession(opts: {
 
     if (event.type === "start") {
       sessionId = event.sessionId;
-      console.log(`[${provider.name}] stream started sid=${sessionId} agent=${agent.id}`);
+      console.log(`[${provider.name}] stream connected sid=${sessionId} agent=${agent.id} call=${callId ?? "n/a"}`);
       return;
     }
     if (event.type === "stop") {
-      console.log(`[${provider.name}] stream stopped`);
+      console.log(`[${provider.name}] stream stopped sid=${sessionId}`);
       socket.close(1000, "provider-stop");
       return;
     }
