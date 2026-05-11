@@ -38,6 +38,11 @@ function statusCallbackUrl(): string {
   return `${base}/functions/v1/telephony-status-callback?provider=twilio`;
 }
 
+function normalizeE164(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -146,7 +151,7 @@ Deno.serve(async (req) => {
 
       case "purchase-number": {
         if (!teamId) return json({ error: "team_id required" }, 400);
-        const phone = String(body.phone_number || "");
+        const phone = normalizeE164(String(body.phone_number || ""));
         if (!phone) return json({ error: "phone_number required" }, 400);
         const form = new URLSearchParams();
         form.set("PhoneNumber", phone);
@@ -161,15 +166,20 @@ Deno.serve(async (req) => {
         });
         const data = await r.json().catch(() => ({}));
         if (!r.ok) return json({ error: `Twilio purchase error (${r.status}): ${data?.message || ""}` }, r.status);
-        // Insert into phone_numbers
-        const { data: row, error } = await admin.from("phone_numbers").insert({
+        // Sync into phone_numbers. If the number already exists, keep routing intact
+        // unless a new agent_id is explicitly provided.
+        const rowPayload: Record<string, unknown> = {
           team_id: teamId,
-          phone_number: data.phone_number,
+          phone_number: normalizeE164(data.phone_number || phone),
           provider: "twilio",
           provider_number_id: data.sid,
           status: "active",
-          agent_id: body.agent_id || null,
-        }).select().single();
+        };
+        if (body.agent_id) rowPayload.agent_id = body.agent_id;
+        const { data: row, error } = await admin.from("phone_numbers")
+          .upsert(rowPayload, { onConflict: "provider,phone_number" })
+          .select()
+          .single();
         if (error) return json({ error: error.message }, 500);
         return json({ number: row, twilio: data });
       }
