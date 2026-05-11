@@ -837,10 +837,28 @@ async function runSession(opts: {
 
   let sessionId = ""; // opaque provider-issued id (stream_sid / streamSid / streamId)
   const history: { role: "user" | "assistant"; content: string }[] = [];
-  const systemPrompt =
+
+  // Map saved voice name (e.g. "Nova") to ElevenLabs voice id. If `agent.voice`
+  // already looks like an id (>10 chars, no spaces) it is passed through.
+  const VOICE_MAP: Record<string, string> = {
+    Nova: "EXAVITQu4vr4xnSDxMaL", Onyx: "JBFqnCBsd6RMkjVDRZzb", Shimmer: "pFZP5JQG7iQjIQuC4Bku",
+    Echo: "cjVigY5qzO86Huf0OWal", Alloy: "Xb7hH8MSUJpSbSDYk0k2", Fable: "onwK4e9ZLuTAKqWW03F9",
+    Neha: "8baRIHZEGj62eS9YHzC6", Roopa: "8i52rsySWGYoU4SRQCex",
+    Sumeet: "X2jQeFZFwKyCkPx2OHSL", Ankush: "7c9GbBg3PCOqyDlCoB3z",
+  };
+  const rawVoice = (agent.voice || "").trim();
+  const voiceId = VOICE_MAP[rawVoice] || (rawVoice.length > 15 && !/\s/.test(rawVoice) ? rawVoice : "EXAVITQu4vr4xnSDxMaL");
+
+  // Build the per-call system prompt from the agent's saved instructions.
+  // Append the configured language so the model speaks in the right language
+  // even if the saved prompt doesn't mention it.
+  const basePrompt =
     (agent.prompt && agent.prompt.trim()) ||
     "You are a helpful AI voice agent. Keep replies short and conversational — they will be spoken aloud.";
-  const voiceId = agent.voice || "EXAVITQu4vr4xnSDxMaL";
+  const languageLine = agent.language
+    ? `\n\nAlways respond in ${agent.language}. Keep replies concise and conversational — they will be spoken aloud over a phone call. Avoid markdown, lists, or code; speak naturally.`
+    : `\n\nKeep replies concise and conversational — they will be spoken aloud over a phone call. Avoid markdown, lists, or code; speak naturally.`;
+  const systemPrompt = `You are "${agent.name}".\n\n${basePrompt}${languageLine}`;
   const llm = resolveLlm(agent.model);
   // If agent is configured for OpenAI but the key is missing, fall back to gateway.
   const llmProvider: LlmProvider = llm.provider === "openai" && !openaiKey ? "lovable" : llm.provider;
