@@ -79,7 +79,7 @@ async function generateEmbeddingsBatch(texts: string[], apiKey: string): Promise
         const resp = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
           method: "POST",
           headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "text-embedding-3-small", input: batch, dimensions: 768 }),
+          body: JSON.stringify({ model: "openai/text-embedding-3-small", input: batch, dimensions: 768 }),
         });
         if (resp.status === 429) { await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000)); continue; }
         if (!resp.ok) throw new Error(`Embedding failed: ${resp.status}`);

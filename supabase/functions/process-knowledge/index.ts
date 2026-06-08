@@ -133,7 +133,7 @@ async function generateEmbeddingsBatch(
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "text-embedding-3-small",
+            model: "openai/text-embedding-3-small",
             input: batch,
             dimensions: 768,
           }),
