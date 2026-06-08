@@ -183,51 +183,49 @@ serve(async (req) => {
         content = (await fileData.text()).trim();
       } else if (fileExt === "csv") {
         content = extractTextFromCSV(await fileData.text());
-      } else if (fileExt === "pdf" || fileExt === "docx") {
-        const base64 = btoa(
-          new Uint8Array(await fileData.arrayBuffer())
-            .reduce((data, byte) => data + String.fromCharCode(byte), "")
-        );
-        const mimeType = fileExt === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-        const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-4.1-mini",
-            messages: [{
-              role: "user",
-              content: [
-                { type: "text", text: "Extract ALL text content from this document. Return only the extracted text, preserving structure. Do not add commentary." },
-                { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
-              ],
-            }],
-            max_tokens: 16000,
-          }),
-        });
-        if (!resp.ok) throw new Error(`${fileExt.toUpperCase()} extraction failed: ${resp.status}`);
-        const result = await resp.json();
-        content = result.choices?.[0]?.message?.content || "";
+      } else if (fileExt === "pdf") {
+        // Extract PDF text using unpdf (pure JS, runs in Deno, no AI roundtrip)
+        try {
+          const { extractText, getDocumentProxy } = await import("https://esm.sh/unpdf@0.12.1");
+          const buffer = new Uint8Array(await fileData.arrayBuffer());
+          const pdf = await getDocumentProxy(buffer);
+          const { text } = await extractText(pdf, { mergePages: true });
+          content = (Array.isArray(text) ? text.join("\n\n") : text).trim();
+          console.log(`[pdf] extracted ${content.length} chars from ${pdf.numPages} pages`);
+        } catch (e) {
+          console.error("[pdf] extraction failed:", e);
+          throw new Error(`PDF parse failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else if (fileExt === "docx") {
+        // Extract DOCX text via mammoth
+        try {
+          const mammoth = await import("https://esm.sh/mammoth@1.8.0?target=denonext");
+          const buffer = await fileData.arrayBuffer();
+          const result = await (mammoth as any).extractRawText({ arrayBuffer: buffer });
+          content = (result.value || "").trim();
+          console.log(`[docx] extracted ${content.length} chars`);
+        } catch (e) {
+          console.error("[docx] extraction failed:", e);
+          throw new Error(`DOCX parse failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
       } else if (fileExt === "xlsx" || fileExt === "xls") {
-        const text = await fileData.text();
-        content = extractTextFromCSV(text);
-        if (!content.trim()) {
-          const base64 = btoa(new Uint8Array(await fileData.arrayBuffer()).reduce((d, b) => d + String.fromCharCode(b), ""));
-          const resp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "gpt-4.1-mini",
-              messages: [{ role: "user", content: [
-                { type: "text", text: "Extract ALL data from this spreadsheet as readable text. Max 1000 rows." },
-                { type: "image_url", image_url: { url: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64}` } },
-              ]}],
-              max_tokens: 16000,
-            }),
-          });
-          if (!resp.ok) throw new Error(`XLSX extraction failed: ${resp.status}`);
-          content = (await resp.json()).choices?.[0]?.message?.content || "";
+        try {
+          const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+          const buffer = new Uint8Array(await fileData.arrayBuffer());
+          const wb = (XLSX as any).read(buffer, { type: "array" });
+          const parts: string[] = [];
+          for (const sheetName of wb.SheetNames) {
+            const csv = (XLSX as any).utils.sheet_to_csv(wb.Sheets[sheetName]);
+            parts.push(`# Sheet: ${sheetName}\n${extractTextFromCSV(csv)}`);
+          }
+          content = parts.join("\n\n").trim();
+          console.log(`[xlsx] extracted ${content.length} chars`);
+        } catch (e) {
+          console.error("[xlsx] extraction failed:", e);
+          throw new Error(`XLSX parse failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
+
     } else if (source.content_text) {
       content = fileExt === "csv" ? extractTextFromCSV(source.content_text) : source.content_text;
     }
