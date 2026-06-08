@@ -269,8 +269,19 @@ serve(async (req) => {
     });
   } catch (e) {
     console.error("process-file-knowledge error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
+    const msg = e instanceof Error ? e.message : "Unknown error";
+    try {
+      const supabaseErr = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+      const body = await req.clone().json().catch(() => ({}));
+      if (body?.sourceId) {
+        await supabaseErr.from("knowledge_sources")
+          .update({ status: "error", error_message: msg })
+          .eq("id", body.sourceId);
+      }
+    } catch (_) { /* ignore */ }
+    return new Response(JSON.stringify({ error: msg }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
+
