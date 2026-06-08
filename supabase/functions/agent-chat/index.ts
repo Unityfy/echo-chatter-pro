@@ -43,7 +43,7 @@ async function getEmbedding(text: string, apiKey: string): Promise<number[] | nu
     const resp = await fetch("https://ai.gateway.lovable.dev/v1/embeddings", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "text-embedding-3-small", input: text, dimensions: 768 }),
+      body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text, dimensions: 768 }),
     });
     if (!resp.ok) return null;
     const data = await resp.json();
