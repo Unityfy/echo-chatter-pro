@@ -75,14 +75,17 @@ async function searchChunks(
   threshold: number
 ): Promise<ChunkResult[]> {
   if (kbIds.length === 0) return [];
-  const { data } = await supabase.rpc("search_knowledge_chunks", {
+  const { data, error } = await supabase.rpc("search_knowledge_chunks", {
     _query_embedding: JSON.stringify(embedding),
     _knowledge_base_ids: kbIds,
     _match_count: matchCount,
     _match_threshold: threshold,
   });
+  if (error) console.error("search_knowledge_chunks RPC error:", error);
+  console.log(`[RAG] searchChunks kbs=${kbIds.length} threshold=${threshold} -> ${(data || []).length} chunks`);
   return data || [];
 }
+
 
 // ─── Intent detection ────────────────────────────────────────
 
