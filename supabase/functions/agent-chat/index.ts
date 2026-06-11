@@ -45,13 +45,19 @@ async function getEmbedding(text: string, apiKey: string): Promise<number[] | nu
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text, dimensions: 768 }),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      console.error("Embedding API error:", resp.status, txt);
+      return null;
+    }
     const data = await resp.json();
     return data.data[0].embedding;
-  } catch {
+  } catch (e) {
+    console.error("Embedding exception:", e);
     return null;
   }
 }
+
 
 // ─── Vector search ───────────────────────────────────────────
 
