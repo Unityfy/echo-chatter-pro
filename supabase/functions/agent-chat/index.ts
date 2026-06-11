@@ -45,13 +45,19 @@ async function getEmbedding(text: string, apiKey: string): Promise<number[] | nu
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: "openai/text-embedding-3-small", input: text, dimensions: 768 }),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      console.error("Embedding API error:", resp.status, txt);
+      return null;
+    }
     const data = await resp.json();
     return data.data[0].embedding;
-  } catch {
+  } catch (e) {
+    console.error("Embedding exception:", e);
     return null;
   }
 }
+
 
 // ─── Vector search ───────────────────────────────────────────
 
@@ -69,14 +75,17 @@ async function searchChunks(
   threshold: number
 ): Promise<ChunkResult[]> {
   if (kbIds.length === 0) return [];
-  const { data } = await supabase.rpc("search_knowledge_chunks", {
+  const { data, error } = await supabase.rpc("search_knowledge_chunks", {
     _query_embedding: JSON.stringify(embedding),
     _knowledge_base_ids: kbIds,
     _match_count: matchCount,
     _match_threshold: threshold,
   });
+  if (error) console.error("search_knowledge_chunks RPC error:", error);
+  console.log(`[RAG] searchChunks kbs=${kbIds.length} threshold=${threshold} -> ${(data || []).length} chunks`);
   return data || [];
 }
+
 
 // ─── Intent detection ────────────────────────────────────────
 
@@ -208,6 +217,8 @@ async function getRAGContext(
 
     const embedding = await getEmbedding(transcriptQuery, lovableApiKey);
     if (!embedding) return { context: "", debug };
+
+
 
     const [agentChunks, detectedIntent] = await Promise.all([
       agentKbIds.length > 0
