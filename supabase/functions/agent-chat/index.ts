@@ -213,10 +213,16 @@ async function getRAGContext(
     const agentKbIds = (linksResult.data || []).map((l: any) => l.knowledge_base_id);
     const hasIntents = intents.some((i) => i.kb_ids.length > 0);
 
+    (debug as any).agent_kb_count = agentKbIds.length;
+    (debug as any).links_error = linksResult.error?.message || null;
+
     if (agentKbIds.length === 0 && !hasIntents) return { context: "", debug };
 
     const embedding = await getEmbedding(transcriptQuery, lovableApiKey);
+    (debug as any).embedding_ok = !!embedding;
+    (debug as any).embedding_dims = embedding?.length || 0;
     if (!embedding) return { context: "", debug };
+
 
     const [agentChunks, detectedIntent] = await Promise.all([
       agentKbIds.length > 0
